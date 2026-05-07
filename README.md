@@ -2,8 +2,6 @@
 
 Async OBD2 TUI scanner with manufacturer-extended PID support.
 
-Built originally for pre-purchase due diligence on a VW T5 van for [Muutto365](https://muutto365.fi).
-
 ## Status
 
 Pre-alpha. Core protocol logic (DTC encode/decode, ISO-TP reassembly) is implemented and tested. TUI scaffold runs but has not been validated against real hardware yet.

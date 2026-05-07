@@ -15,7 +15,7 @@ import logging
 import sys
 
 from core.connection import ConnectionConfig, ObdConnection
-from tui.app import HudsonApp
+from Hudson.tui.app import HudsonApp
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
