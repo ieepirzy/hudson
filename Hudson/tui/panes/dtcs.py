@@ -54,6 +54,7 @@ class DtcPane(Widget):
         super().__init__(id=id)
         self._connection = connection
         self._init = init_result
+        self._auto_scanned = False
 
     def compose(self) -> ComposeResult:
         yield Static(" Press r to scan for DTCs", id="dtc-status")
@@ -63,6 +64,11 @@ class DtcPane(Widget):
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
         table.add_columns("Code", "System", "Type", "Description")
+
+    async def on_show(self) -> None:
+        if not self._auto_scanned:
+            self._auto_scanned = True
+            await self.action_refresh()
 
     async def action_refresh(self) -> None:
         self.query_one("#dtc-status", Static).update(" Scanning...")

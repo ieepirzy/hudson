@@ -31,10 +31,19 @@ class _FakeQuantity:
 class FakeConnection:
     """Implements the same surface as `ObdConnection` for tests."""
 
+    # Realistic set of stored DTCs — cleared by CLEAR_DTC, readable by GET_DTC.
+    # Format matches what python-obd returns: list of (code_str, description_str).
+    _INITIAL_DTCS: list[tuple[str, str]] = [
+        ("P0300", "Random/Multiple Cylinder Misfire Detected"),
+        ("P0171", "System Too Lean (Bank 1)"),
+        ("C0035", "Left Front Wheel Speed Sensor Circuit"),
+    ]
+
     def __init__(self, vin: str = "WV2ZZZ7HZ8H123456") -> None:
         self._vin = vin
         self._connected = False
         self._t0 = monotonic()
+        self._dtcs: list[tuple[str, str]] = list(self._INITIAL_DTCS)
         self._supported = {
             obd.commands.RPM,
             obd.commands.SPEED,
@@ -43,6 +52,8 @@ class FakeConnection:
             obd.commands.INTAKE_TEMP,
             obd.commands.ENGINE_LOAD,
             obd.commands.VIN,
+            obd.commands.GET_DTC,
+            obd.commands.CLEAR_DTC,
         }
 
     async def connect(self) -> None:
@@ -68,6 +79,13 @@ class FakeConnection:
 
         if cmd is obd.commands.VIN:
             return _make_response(cmd, self._vin)
+
+        if cmd is obd.commands.GET_DTC:
+            return _make_response(cmd, list(self._dtcs))
+
+        if cmd is obd.commands.CLEAR_DTC:
+            self._dtcs.clear()
+            return _make_response(cmd, [])
 
         t = monotonic() - self._t0
         value = _synthetic_value(cmd, t)
