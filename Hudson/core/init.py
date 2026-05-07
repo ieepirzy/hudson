@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
-from src.hudson.core.connection import ObdConnection
-from src.hudson.core.vin import VinReadError, read_vin
-from src.hudson.manufacturers.registry import select_decoder
+from Hudson.core.connection import ObdConnection
+from Hudson.core.vin import VinReadError, read_vin
+from Hudson.manufacturers.registry import select_decoder
 
 if TYPE_CHECKING:
     from obd import OBDCommand

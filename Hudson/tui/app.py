@@ -15,11 +15,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header
 
-from src.hudson.core.connection import ObdConnection
-from src.hudson.core.init import InitResult
-from src.hudson.core.poller import Reading
-from src.hudson.tui.screens.dashboard import DashboardScreen
-from src.hudson.tui.screens.splash import SplashScreen
+from Hudson.core.connection import ObdConnection
+from Hudson.core.init import InitResult
+from Hudson.core.poller import Reading
+from Hudson.tui.screens.dashboard import DashboardScreen
+from Hudson.tui.screens.splash import SplashScreen
 
 log = logging.getLogger(__name__)
 

@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from obd import OBDCommand, OBDResponse
 
-    from src.hudson.core.connection import ObdConnection
+    from .core.connection import ObdConnection
 
 log = logging.getLogger(__name__)
 

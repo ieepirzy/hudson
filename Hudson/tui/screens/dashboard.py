@@ -15,10 +15,10 @@ from textual.containers import Grid, Horizontal
 from textual.screen import Screen
 from textual.widgets import Static
 
-from src.hudson.core.connection import ObdConnection
-from src.hudson.core.init import InitResult
-from src.hudson.core.poller import Poller, PollSpec, Reading
-from src.hudson.tui.widgets.gauge import Gauge
+from Hudson.core.connection import ObdConnection
+from Hudson.core.init import InitResult
+from Hudson.core.poller import Poller, PollSpec, Reading
+from Hudson.tui.widgets.gauge import Gauge
 
 log = logging.getLogger(__name__)
 

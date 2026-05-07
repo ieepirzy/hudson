@@ -15,7 +15,7 @@ import logging
 
 import obd
 
-from src.hudson.core.connection import ObdConnection
+from Hudson.core.connection import ObdConnection
 
 log = logging.getLogger(__name__)
 

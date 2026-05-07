@@ -24,8 +24,8 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Label, Static
 
-from src.hudson.core.connection import ObdConnection
-from src.hudson.core.init import InitEvent, InitResult, InitStep, run_init
+from Hudson.core.connection import ObdConnection
+from Hudson.core.init import InitEvent, InitResult, InitStep, run_init
 
 log = logging.getLogger(__name__)
 
