@@ -1,0 +1,39 @@
+/* hudson app styles */
+
+Screen {
+    background: $surface;
+}
+
+#vehicle-info {
+    height: 1;
+    padding: 0 1;
+    background: $primary 10%;
+    color: $text-muted;
+}
+
+#dashboard-grid {
+    grid-size: 3 2;
+    grid-gutter: 1;
+    padding: 1;
+}
+
+Gauge {
+    border: round $primary;
+    padding: 0 1;
+    height: 100%;
+}
+
+Gauge.gauge--disabled {
+    border: round $surface-lighten-1;
+    color: $text-muted;
+}
+
+Gauge > .gauge--label {
+    color: $text-muted;
+    text-style: bold;
+}
+
+Gauge > .gauge--value {
+    color: $accent;
+    text-style: bold;
+}

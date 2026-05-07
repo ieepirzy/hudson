@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hudson"
+version = "0.1.0"
+description = "Async OBD2 TUI scanner with manufacturer-extended PID support"
+requires-python = ">=3.11"
+authors = [{ name = "Ilari" }]
+license = { text = "MIT" }
+readme = "README.md"
+
+dependencies = [
+    "obd>=0.7.2",          # blocking ELM327 layer + J1979 PID table
+    "textual>=0.80.0",     # async TUI
+    "textual-plotext>=0.2.1",  # sparkline / time-series widgets
+    "pyserial>=3.5",       # explicit, in case rfcomm path bypasses python-obd
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "textual-dev>=1.5",    # `textual run --dev`, devtools console
+]
+
+[project.scripts]
+hudson = "hudson.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
