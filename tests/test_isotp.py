@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from hudson.core.isotp import IsoTpError, Reassembler
+from Hudson.core.isotp import IsoTpError, Reassembler
 
 
 def test_single_frame_returns_immediately() -> None:

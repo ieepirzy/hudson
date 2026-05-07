@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from hudson.core.dtc import DTC, decode_dtc, decode_dtc_list, encode_dtc
+from Hudson.core.dtc import DTC, decode_dtc, decode_dtc_list, encode_dtc
 
 
 @pytest.mark.parametrize(

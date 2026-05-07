@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from hudson.tui.app import HudsonApp
+from Hudson.tui.app import HudsonApp
 from tests.fixtures.fake_connection import FakeConnection
 
 
@@ -38,7 +38,7 @@ async def test_splash_to_dashboard_smoke() -> None:
             await pilot.pause(0.1)
 
         # After init, the dashboard should be on top.
-        from hudson.tui.screens.dashboard import DashboardScreen
+        from Hudson.tui.screens.dashboard import DashboardScreen
 
         active = app.screen
         assert isinstance(active, DashboardScreen), (
