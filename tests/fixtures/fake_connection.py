@@ -84,7 +84,7 @@ class FakeConnection:
             return _make_response(cmd, list(self._dtcs))
 
         if cmd is obd.commands.CLEAR_DTC:
-            self._dtcs.clear()
+            self._dtcs = list(self._INITIAL_DTCS)
             return _make_response(cmd, [])
 
         t = monotonic() - self._t0
