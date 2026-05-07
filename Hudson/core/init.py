@@ -130,14 +130,14 @@ async def run_init(
         result.manufacturer_module = importlib.import_module("Hudson.manufacturers.generic")
         result.manufacturer_name = "Generic"
 
-    # ── 5 & 6. UDS discovery (strategy-gated) ────────────────────────────────
-    strategy = getattr(result.manufacturer_module, "DISCOVERY_STRATEGY", "mode01_only")
+    # ── 5 & 6. UDS discovery ─────────────────────────────────────────────────
+    strategy = getattr(result.manufacturer_module, "DISCOVERY_STRATEGY", "probe")
 
-    if strategy == "uds":
-        # The ECU version probe (0xF189) is the authoritative UDS capability gate —
-        # 150 ms, read-only, empirically correct. VIN year is NOT used to decide:
-        # T/V/W/X/Y are ambiguous across OBD-II-era cycles, and VINs can be wrong.
-        await _run_uds_steps(connection, events, result)
+    # "probe"  → ask the ECU at runtime (handles uncertain transition-era vehicles)
+    # "uds"    → manufacturer is certain; skip the probe gate, go straight to discovery
+    # anything else → mode01_only, skip UDS entirely
+    if strategy in ("uds", "probe"):
+        await _run_uds_steps(connection, events, result, probe_only=(strategy == "probe"))
     else:
         await events.put(InitEvent(InitStep.ECU_VERSION, "not applicable", done=True))
         await events.put(InitEvent(InitStep.UDS_DISCOVERY, "not applicable", done=True))
@@ -162,16 +162,22 @@ async def _run_uds_steps(
     connection: ObdConnection,
     events: asyncio.Queue[InitEvent],
     result: InitResult,
+    *,
+    probe_only: bool = False,
 ) -> None:
     """Execute ECU_VERSION and UDS_DISCOVERY init steps.
 
-    The ECU version probe (0xF189) is the capability gate: if the ECU responds,
-    the car speaks UDS and we proceed with discovery. If it doesn't respond, we
-    emit a skip event and return. VIN year plays no role here.
+    When probe_only=True (strategy="probe"), 0xF189 is the gate: a response
+    promotes to full discovery; no response falls back to mode 01 gracefully.
+    When probe_only=False (strategy="uds"), we trust the manufacturer and
+    proceed to full discovery regardless — but still read the ECU version first.
     """
 
     # ── 5. ECU version ───────────────────────────────────────────────────────
-    await events.put(InitEvent(InitStep.ECU_VERSION, "probing ECU software version (0xF189)"))
+    detail = "probing ECU software version (0xF189)"
+    if probe_only:
+        detail = "probing for UDS capability (0xF189)"
+    await events.put(InitEvent(InitStep.ECU_VERSION, detail))
 
     cache = EcuCache()
     await cache.init()
@@ -181,7 +187,7 @@ async def _run_uds_steps(
 
     ecu_version = await discovery.read_ecu_version()
     if ecu_version is None:
-        # ECU didn't respond — not a UDS vehicle (or UDS not available on this transport)
+        # ECU didn't respond to 0xF189 — not UDS capable on this transport.
         await events.put(
             InitEvent(InitStep.ECU_VERSION, "no response — ECU does not speak UDS", done=True)
         )

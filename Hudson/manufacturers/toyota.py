@@ -11,7 +11,7 @@ Mode 22 support is pending field verification.
 from __future__ import annotations
 
 name = "Toyota"
-DISCOVERY_STRATEGY = "mode01_only"
+DISCOVERY_STRATEGY = "probe"
 
 
 DTC_DESCRIPTIONS: dict[str, str] = {

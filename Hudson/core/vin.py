@@ -25,20 +25,18 @@ import obd
 # Letters A–S are unambiguous for a diagnostic tool: the first-cycle years
 # (1980–1995) predate OBD-II, so we can safely return the second-cycle year.
 #
-# Letters T, V, W, X, Y are deliberately absent:
-#   T = 1996 or 2026 (already ambiguous as of this year)
-#   V = 1997 or 2027, W = 1998 or 2028, X = 1999 or 2029, Y = 2000 or 2030
-# Both cycles are fully within the OBD-II era, so the decode_model_year()
-# caller must not rely on the year to determine UDS capability for these cars.
-# Instead, probe the ECU directly (0xF189) — that is the authoritative gate.
+# Letters T, V, W, X, Y are deliberately absent — both OBD-II-era cycles are
+# plausible (e.g. T = 1996 or 2026, V = 1997 or 2027). decode_model_year()
+# returns None for these so callers fall back to a runtime ECU probe.
+AMBIGUOUS_YEARS: frozenset[str] = frozenset("TVWXY")
+
 _YEAR_CHARS: dict[str, int] = {
     # A–S: return the second-cycle year (2010–2025); first cycle predates OBD-II
     "A": 2010, "B": 2011, "C": 2012, "D": 2013, "E": 2014,
     "F": 2015, "G": 2016, "H": 2017, "J": 2018, "K": 2019,
     "L": 2020, "M": 2021, "N": 2022, "P": 2023, "R": 2024,
     "S": 2025,
-    # T, V, W, X, Y intentionally omitted — both cycles are OBD-II era,
-    # so year alone cannot determine UDS capability. Returns None via .get().
+    # T, V, W, X, Y intentionally omitted — both cycles are OBD-II era.
     # Digits — unambiguous (2001–2009):
     "1": 2001, "2": 2002, "3": 2003, "4": 2004, "5": 2005,
     "6": 2006, "7": 2007, "8": 2008, "9": 2009,

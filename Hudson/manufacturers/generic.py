@@ -6,7 +6,7 @@ Returns None for everything; the caller falls back to SAE J1979 / J2012 lookups.
 from __future__ import annotations
 
 name = "Generic"
-DISCOVERY_STRATEGY = "mode01_only"
+DISCOVERY_STRATEGY = "probe"
 
 
 def lookup_dtc(code: str) -> str | None:

@@ -42,6 +42,10 @@ _REGISTRY: list[WmiEntry] = [
     # Toyota
     WmiEntry("JT", "Hudson.manufacturers.toyota"),
     WmiEntry("VNK", "Hudson.manufacturers.toyota"),  # Toyota France
+    # Volvo (Ford-era 1999–2010)
+    WmiEntry("YV1", "Hudson.manufacturers.volvo"),  # Volvo passenger
+    WmiEntry("YV2", "Hudson.manufacturers.volvo"),  # Volvo bus/truck
+    WmiEntry("YV3", "Hudson.manufacturers.volvo"),  # Volvo truck
 ]
 
 
