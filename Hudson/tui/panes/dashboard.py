@@ -47,11 +47,9 @@ class SessionStats(Widget):
         opacity: 0.5;
         height: 1;
     }
-    .ss-row { height: 1; layout: horizontal; }
-    .ss-k { color: $text-muted; width: 10; }
-    .ss-v { color: $text; text-align: right; width: 1fr; }
-    .ss-ok   { color: limegreen; text-align: right; width: 1fr; }
-    .ss-warn { color: gold;      text-align: right; width: 1fr; }
+    .ss-row { height: 1; }
+    .ss-ok   { color: limegreen; }
+    .ss-warn { color: gold; }
     """
 
     def __init__(self, dtc_count: int = 0) -> None:
