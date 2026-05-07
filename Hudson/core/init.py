@@ -104,7 +104,7 @@ async def run_init(
     if result.vin is not None:
         module_path = select_decoder(result.vin)
     else:
-        module_path = "hudson.manufacturers.generic"
+        module_path = "Hudson.manufacturers.generic"
     try:
         result.manufacturer_module = importlib.import_module(module_path)
         result.manufacturer_name = getattr(result.manufacturer_module, "name", "Generic")
@@ -116,7 +116,7 @@ async def run_init(
         await events.put(
             InitEvent(InitStep.MANUFACTURER, "generic fallback", error=str(exc), done=True)
         )
-        result.manufacturer_module = importlib.import_module("hudson.manufacturers.generic")
+        result.manufacturer_module = importlib.import_module("Hudson.manufacturers.generic")
         result.manufacturer_name = "Generic"
 
     # ── 5. Supported PIDs ────────────────────────────────────────

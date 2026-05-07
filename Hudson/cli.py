@@ -1,7 +1,7 @@
 """Command-line entry point.
 
 Usage:
-    hudson [--port /dev/rfcomm0] [--protocol auto|6] [--debug]
+    hudson [--port /dev/rfcomm0] [--protocol auto|6] [--mock] [--debug]
 
 Connection is opened inside the SplashScreen so init progress is visible
 to the user, not hidden behind a CLI loading delay.
@@ -14,8 +14,8 @@ import asyncio
 import logging
 import sys
 
-from .core.connection import ConnectionConfig, ObdConnection
-from .tui.app import HudsonApp
+from Hudson.core.connection import ConnectionConfig, ObdConnection
+from Hudson.tui.app import HudsonApp
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -37,6 +37,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help='OBD2 protocol id ("6" = ISO 15765-4 CAN 11/500). Default: auto.',
     )
     parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use a fake connection with synthetic data (no hardware required).",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Verbose logging to stderr.",
@@ -45,14 +50,19 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 async def _amain(args: argparse.Namespace) -> int:
-    config = ConnectionConfig(
-        portstr=args.port,
-        baudrate=args.baudrate,
-        protocol=args.protocol,
-    )
-    connection = ObdConnection(config)
+    if args.mock:
+        from tests.fixtures.fake_connection import FakeConnection
+        connection = FakeConnection()
+    else:
+        config = ConnectionConfig(
+            portstr=args.port,
+            baudrate=args.baudrate,
+            protocol=args.protocol,
+        )
+        connection = ObdConnection(config)
+
     try:
-        app = HudsonApp(connection)
+        app = HudsonApp(connection)  # type: ignore[arg-type]
         await app.run_async()
     finally:
         await connection.close()

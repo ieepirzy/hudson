@@ -35,13 +35,13 @@ class WmiEntry:
 # Ordered most-specific first; first match wins.
 _REGISTRY: list[WmiEntry] = [
     # VW T5 family (commercial vans built in Hannover)
-    WmiEntry("WV1", "hudson.manufacturers.vw_audi"),  # VW commercial
-    WmiEntry("WV2", "hudson.manufacturers.vw_audi"),  # VW Bus/T-series
-    WmiEntry("WVW", "hudson.manufacturers.vw_audi"),  # VW passenger
-    WmiEntry("WAU", "hudson.manufacturers.vw_audi"),  # Audi Germany
+    WmiEntry("WV1", "Hudson.manufacturers.vw_audi"),  # VW commercial
+    WmiEntry("WV2", "Hudson.manufacturers.vw_audi"),  # VW Bus/T-series
+    WmiEntry("WVW", "Hudson.manufacturers.vw_audi"),  # VW passenger
+    WmiEntry("WAU", "Hudson.manufacturers.vw_audi"),  # Audi Germany
     # Toyota
-    WmiEntry("JT", "hudson.manufacturers.toyota"),
-    WmiEntry("VNK", "hudson.manufacturers.toyota"),  # Toyota France
+    WmiEntry("JT", "Hudson.manufacturers.toyota"),
+    WmiEntry("VNK", "Hudson.manufacturers.toyota"),  # Toyota France
 ]
 
 
@@ -51,10 +51,10 @@ def select_decoder(vin: str) -> str:
     Falls back to the generic decoder if no WMI matches.
     """
     if len(vin) < 3:
-        return "hudson.manufacturers.generic"
+        return "Hudson.manufacturers.generic"
 
     vin_upper = vin.upper()
     for entry in _REGISTRY:
         if vin_upper.startswith(entry.wmi_prefix):
             return entry.decoder_module
-    return "hudson.manufacturers.generic"
+    return "Hudson.manufacturers.generic"
