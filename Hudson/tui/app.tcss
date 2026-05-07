@@ -1,40 +1,75 @@
-/* Hudson — btop-inspired TUI styles */
+/* Hudson — btop-inspired dark theme */
 
-Screen {
-    background: $surface;
-}
+App { background: #080c10; }
+Screen { background: #080c10; }
 
+/* Header */
 #header-strip {
     height: 1;
-    background: $primary-darken-2;
-    color: $text;
+    background: #0d1117;
+    color: #7a9ab8;
     text-style: bold;
     padding: 0 1;
+    border-bottom: tall #1e2730;
 }
 
+/* Tab bar */
 #tab-bar-container {
     height: 1;
-    background: $surface-darken-1;
+    background: #0a0e14;
     padding: 0 1;
+    border-bottom: tall #1a2230;
 }
-
-.tab { padding: 0 1; color: $text-muted; }
+.tab { padding: 0 1; color: #3a4a5a; }
 .tab--active { color: $accent; text-style: bold; }
 
-#dashboard-grid {
-    grid-size: 3 2;
-    grid-gutter: 1;
-    padding: 1;
-    height: 1fr;
+/* Content area */
+#content { background: #080c10; }
+
+/* Gauge base */
+Gauge {
+    border: round #1a2230;
+    background: #0d1117;
+}
+Gauge.gauge--disabled { opacity: 0.3; }
+
+/* Session / connection stat boxes */
+SessionStats, ConnectionStats {
+    border: round #1a2230;
+    background: #0d1117;
 }
 
-Gauge { border: round $primary 50%; padding: 0 1; height: 100%; }
-Gauge.gauge--disabled { border: round $surface-lighten-1; opacity: 0.4; }
-.gauge--label { color: $text-muted; text-style: bold; }
-.gauge--value { color: $success; text-style: bold; }
+/* DTC pane */
+#dtc-status {
+    height: 1;
+    padding: 0 1;
+    color: #3a4a5a;
+    background: #0d1117;
+}
+#dtc-table {
+    height: 1fr;
+    border: round #1a2230;
+    margin: 1;
+    background: #0d1117;
+}
 
-#dtc-status { height: 1; padding: 0 1; color: $text-muted; background: $surface-darken-1; }
-#dtc-table { height: 1fr; border: round $primary 50%; margin: 1; }
-#raw-log { height: 1fr; border: round $primary 50%; padding: 0 1; }
-.vehicle-section { border: round $primary 50%; padding: 1 2; margin-bottom: 1; height: auto; }
+/* Log pane */
+#raw-log {
+    height: 1fr;
+    border: round #1a2230;
+    padding: 0 1;
+    background: #0d1117;
+}
+
+/* Vehicle pane */
+.vehicle-section {
+    border: round #1a2230;
+    padding: 1 2;
+    margin-bottom: 1;
+    height: auto;
+    background: #0d1117;
+}
 .vehicle-value { color: $accent; }
+
+/* Footer */
+Footer { background: #0d1117; border-top: tall #1a2230; color: #3a4a5a; }

@@ -7,9 +7,9 @@ import logging
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 
-from .core.connection import ObdConnection
-from .tui.screens.splash import SplashScreen
-from .tui.screens.main import MainScreen
+from Hudson.core.connection import ObdConnection
+from Hudson.tui.screens.splash import SplashScreen
+from Hudson.tui.screens.main import MainScreen
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class HudsonApp(App[None]):
     """Hudson — OBD2 diagnostic TUI."""
 
     TITLE = "Hudson"
-    CSS_PATH = "tui/app.tcss"
+    CSS_PATH = "app.tcss"
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),

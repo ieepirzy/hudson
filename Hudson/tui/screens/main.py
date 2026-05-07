@@ -16,18 +16,22 @@ import logging
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import ContentSwitcher, Horizontal, Vertical
+from textual.widgets import ContentSwitcher
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Static
 
-from .core.connection import ObdConnection
-from .core.init import InitResult
-from .core.poller import Poller, PollSpec, Reading
-from .tui.panes.dashboard import DashboardPane
-from .tui.panes.dtcs import DtcPane
-from .tui.panes.log import LogPane
-from .tui.panes.vehicle import VehiclePane
+from Hudson.core.connection import ObdConnection
+from Hudson.core.init import InitResult
+from Hudson.core.poller import Poller, PollSpec, Reading
+from Hudson.tui.panes.dashboard import DashboardPane
+from Hudson.tui.panes.dtcs import DtcPane
+from Hudson.tui.panes.log import LogPane
+from Hudson.tui.panes.vehicle import VehiclePane
+
+from Hudson.core.poller import PollSpec
+import obd
 
 log = logging.getLogger(__name__)
 
@@ -148,9 +152,6 @@ class MainScreen(Screen[None]):
             yield VehiclePane(self._init, id="vehicle")
 
     async def on_mount(self) -> None:
-        from .core.poller import PollSpec
-        import obd
-
         DEFAULT_POLL_SPECS: list[PollSpec] = [
             PollSpec(obd.commands.RPM, 0.1),
             PollSpec(obd.commands.SPEED, 0.1),
