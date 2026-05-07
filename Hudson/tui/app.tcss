@@ -1,39 +1,40 @@
-/* hudson app styles */
+/* Hudson — btop-inspired TUI styles */
 
 Screen {
     background: $surface;
 }
 
-#vehicle-info {
+#header-strip {
     height: 1;
+    background: $primary-darken-2;
+    color: $text;
+    text-style: bold;
     padding: 0 1;
-    background: $primary 10%;
-    color: $text-muted;
 }
+
+#tab-bar-container {
+    height: 1;
+    background: $surface-darken-1;
+    padding: 0 1;
+}
+
+.tab { padding: 0 1; color: $text-muted; }
+.tab--active { color: $accent; text-style: bold; }
 
 #dashboard-grid {
     grid-size: 3 2;
     grid-gutter: 1;
     padding: 1;
+    height: 1fr;
 }
 
-Gauge {
-    border: round $primary;
-    padding: 0 1;
-    height: 100%;
-}
+Gauge { border: round $primary 50%; padding: 0 1; height: 100%; }
+Gauge.gauge--disabled { border: round $surface-lighten-1; opacity: 0.4; }
+.gauge--label { color: $text-muted; text-style: bold; }
+.gauge--value { color: $success; text-style: bold; }
 
-Gauge.gauge--disabled {
-    border: round $surface-lighten-1;
-    color: $text-muted;
-}
-
-Gauge > .gauge--label {
-    color: $text-muted;
-    text-style: bold;
-}
-
-Gauge > .gauge--value {
-    color: $accent;
-    text-style: bold;
-}
+#dtc-status { height: 1; padding: 0 1; color: $text-muted; background: $surface-darken-1; }
+#dtc-table { height: 1fr; border: round $primary 50%; margin: 1; }
+#raw-log { height: 1fr; border: round $primary 50%; padding: 0 1; }
+.vehicle-section { border: round $primary 50%; padding: 1 2; margin-bottom: 1; height: auto; }
+.vehicle-value { color: $accent; }
