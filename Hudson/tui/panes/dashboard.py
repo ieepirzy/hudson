@@ -132,13 +132,11 @@ class DashboardPane(Widget):
         layout: vertical;
         width: 2fr;
         padding: 1;
-        gap: 1;
     }
     #dash-right {
         layout: vertical;
         width: 1fr;
         padding: 1;
-        gap: 1;
     }
     """
 

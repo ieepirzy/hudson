@@ -30,6 +30,7 @@ Screen { background: #080c10; }
 Gauge {
     border: round #1a2230;
     background: #0d1117;
+    margin-bottom: 1;
 }
 Gauge.gauge--disabled { opacity: 0.3; }
 
@@ -37,6 +38,7 @@ Gauge.gauge--disabled { opacity: 0.3; }
 SessionStats, ConnectionStats {
     border: round #1a2230;
     background: #0d1117;
+    margin-bottom: 1;
 }
 
 /* DTC pane */
