@@ -19,11 +19,20 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator
 
 import obd
+from obd import OBDCommand
+from obd.protocols import ECU
 
 if TYPE_CHECKING:
-    from obd import OBDCommand, OBDResponse
+    from obd import OBDResponse
 
 log = logging.getLogger(__name__)
+
+
+def _uds_passthrough(messages: list) -> bytes | None:
+    """Decoder that returns raw payload bytes from the first CAN message."""
+    if not messages:
+        return None
+    return bytes(messages[0].data)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +94,63 @@ class ObdConnection:
             raise RuntimeError("not connected")
         # `supported_commands` is a property that reads pre-probed state, no I/O.
         return set(self._conn.supported_commands)
+
+    @property
+    def is_mock(self) -> bool:
+        return False
+
+    async def query_uds(self, service: int, identifier: int, timeout: float = 0.15) -> bytes | None:
+        """Send a UDS ReadDataByIdentifier (0x22) request via OBDCommand.
+
+        Only service 0x22 is permitted. Returns the data bytes on a positive
+        response (0x62), or None on negative response (0x7F) or no reply.
+        """
+        if service != 0x22:
+            raise ValueError(f"only UDS service 0x22 is permitted; got {service:#04x}")
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        high = (identifier >> 8) & 0xFF
+        low = identifier & 0xFF
+        cmd = OBDCommand(
+            f"UDS_{identifier:04X}",
+            f"UDS ReadDataByIdentifier 0x{identifier:04X}",
+            bytes([0x22, high, low]),
+            0,
+            _uds_passthrough,
+            ECU.ALL,
+            False,
+        )
+
+        async with self._lock:
+            resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+
+        if resp.is_null() or resp.value is None:
+            return None
+
+        raw: bytes = resp.value
+        if len(raw) >= 3 and raw[0] == 0x62 and raw[1] == high and raw[2] == low:
+            return bytes(raw[3:])
+        return None
+
+    async def send_tester_present(self) -> None:
+        """Send UDS TesterPresent (0x3E 0x00) keepalive — best-effort, never raises."""
+        if self._conn is None:
+            return
+        cmd = OBDCommand(
+            "TESTER_PRESENT",
+            "UDS TesterPresent keepalive",
+            bytes([0x3E, 0x00]),
+            0,
+            lambda msgs: None,
+            ECU.ALL,
+            False,
+        )
+        try:
+            async with self._lock:
+                await asyncio.to_thread(self._conn.query, cmd, force=True)
+        except Exception:
+            log.debug("TesterPresent suppressed")
 
     @property
     def is_connected(self) -> bool:

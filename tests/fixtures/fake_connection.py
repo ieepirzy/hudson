@@ -37,6 +37,8 @@ class FakeConnection:
         ("P0300", "Random/Multiple Cylinder Misfire Detected"),
         ("P0171", "System Too Lean (Bank 1)"),
         ("C0035", "Left Front Wheel Speed Sensor Circuit"),
+        # VAG-specific — no description from python-obd; resolved via vw_audi.lookup_dtc
+        ("P1176", ""),
     ]
 
     def __init__(self, vin: str = "WV2ZZZ7HZ8H123456") -> None:
@@ -74,6 +76,10 @@ class FakeConnection:
     async def supported_commands(self) -> set[OBDCommand]:
         return set(self._supported)
 
+    @property
+    def is_mock(self) -> bool:
+        return True
+
     async def query(self, cmd: OBDCommand, force: bool = False) -> OBDResponse:
         await asyncio.sleep(0.02)  # simulate UART round-trip
 
@@ -90,6 +96,25 @@ class FakeConnection:
         t = monotonic() - self._t0
         value = _synthetic_value(cmd, t)
         return _make_response(cmd, value)
+
+    async def query_uds(self, service: int, identifier: int, timeout: float = 0.15) -> bytes | None:
+        """Return fake positive UDS responses for known mock identifiers."""
+        await asyncio.sleep(0.01)
+        return _MOCK_UDS_RESPONSES.get(identifier)
+
+    async def send_tester_present(self) -> None:
+        pass
+
+
+# Fake UDS positive-response payloads (data bytes only, UDS header stripped).
+_MOCK_UDS_RESPONSES: dict[int, bytes] = {
+    0xF189: b"0001\x00",                     # ECU SW version → "0001"
+    0xF190: b"WV2ZZZ7HZ8H123456",            # VIN via UDS
+    0xF400: bytes([0x00, 0x0F, 0x00, 0x00]), # boost pressure actual
+    0xF401: bytes([0x00, 0x12, 0x00, 0x00]), # boost pressure setpoint
+    0xF40B: bytes([0x01, 0x2C]),             # boost actual (kPa)
+    0xF40C: bytes([0x01, 0x40]),             # boost specified (kPa)
+}
 
 
 def _synthetic_value(cmd: OBDCommand, t: float) -> object:

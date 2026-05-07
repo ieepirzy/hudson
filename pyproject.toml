@@ -19,6 +19,7 @@ dependencies = [
     "textual>=0.80.0",     # async TUI
     "textual-plotext>=0.2.1",  # sparkline / time-series widgets
     "pyserial>=3.5",       # explicit, in case rfcomm path bypasses python-obd
+    "aiosqlite>=0.19.0",   # async SQLite for ECU discovery cache
 ]
 
 [project.optional-dependencies]

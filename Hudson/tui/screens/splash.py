@@ -1,17 +1,19 @@
 """Splash screen — runs the init sequence with live step-by-step progress.
 
-Visually:
+Visually (UDS path):
 
-  ┌─ Hudson ─────────────────────────────────────────┐
-  │                                                  │
-  │   ✓  Connection      ISO 15765-4 (CAN 11/500)    │
-  │   ✓  Protocol        ISO 15765-4 (CAN 11/500)    │
-  │   ✓  VIN             WV2ZZZ7HZ8H123456            │
-  │   ✓  Manufacturer    VW/Audi                     │
-  │   ⏳  Supported PIDs  probing...                   │
-  │   ·  Ready                                       │
-  │                                                  │
-  └──────────────────────────────────────────────────┘
+  ┌─ HUDSON ─────────────────────────────────────────────────────────────┐
+  │                                                                       │
+  │   ✓  Connection      connected                                        │
+  │   ✓  Protocol        ISO 15765-4 (CAN 11/500)                        │
+  │   ✓  VIN             WV2ZZZ7HZ8H123456                               │
+  │   ✓  Manufacturer    VW/Audi                                         │
+  │   ✓  ECU version     0001                                            │
+  │   ⏳  UDS discovery   [████████████░░░░░░░░]  61%   (624/1024)       │
+  │   ·  Supported PIDs                                                  │
+  │   ·  Ready                                                           │
+  │                                                                       │
+  └───────────────────────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
@@ -29,26 +31,34 @@ from Hudson.core.init import InitEvent, InitResult, InitStep, run_init
 
 log = logging.getLogger(__name__)
 
+_BAR_WIDTH = 20
 
 _STEP_LABELS: dict[InitStep, str] = {
-    InitStep.CONNECT: "Connection",
-    InitStep.PROTOCOL: "Protocol",
-    InitStep.VIN: "VIN",
-    InitStep.MANUFACTURER: "Manufacturer",
+    InitStep.CONNECT:        "Connection",
+    InitStep.PROTOCOL:       "Protocol",
+    InitStep.VIN:            "VIN",
+    InitStep.MANUFACTURER:   "Manufacturer",
+    InitStep.ECU_VERSION:    "ECU version",
+    InitStep.UDS_DISCOVERY:  "UDS discovery",
     InitStep.SUPPORTED_PIDS: "Supported PIDs",
-    InitStep.READY: "Ready",
+    InitStep.READY:          "Ready",
 }
 
 
+def _progress_bar(progress: float) -> str:
+    filled = round(progress * _BAR_WIDTH)
+    return f"[{'█' * filled}{'░' * (_BAR_WIDTH - filled)}]"
+
+
 class SplashScreen(Screen[InitResult]):
-    """Run init, show progress, dismiss with the result on completion."""
+    """Run init, show live progress, dismiss with the result on completion."""
 
     DEFAULT_CSS = """
     SplashScreen {
         align: center middle;
     }
     SplashScreen > Vertical {
-        width: 70;
+        width: 72;
         height: auto;
         border: round $primary;
         padding: 1 2;
@@ -75,14 +85,13 @@ class SplashScreen(Screen[InitResult]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("HUDSON — pre-flight check", classes="splash-title")
+            yield Static("HUDSON — initializing", classes="splash-title")
             for step, label_text in _STEP_LABELS.items():
                 lbl = Label(f" ·  {label_text}", classes="splash-step")
                 self._labels[step] = lbl
                 yield lbl
 
     async def on_mount(self) -> None:
-        # Drive the init sequence and the consumer concurrently.
         consumer = asyncio.create_task(self._consume_events())
         try:
             result = await run_init(self._connection, self._events)
@@ -91,12 +100,15 @@ class SplashScreen(Screen[InitResult]):
             await self._events.put(
                 InitEvent(InitStep.CONNECT, "init aborted", error=str(exc), done=True)
             )
-            await asyncio.sleep(2)  # let user see the error
+            await asyncio.sleep(2)
             consumer.cancel()
             self.app.exit(message=f"Init failed: {exc}")
             return
 
-        # Let final event render, then dismiss.
+        # Fire background UDS priority-2 sweep before dismissing.
+        if result.uds_discovery is not None:
+            asyncio.create_task(result.uds_discovery.run_priority2_background())
+
         await asyncio.sleep(0.2)
         consumer.cancel()
         self.dismiss(result)
@@ -107,15 +119,22 @@ class SplashScreen(Screen[InitResult]):
             label = self._labels.get(event.step)
             if label is None:
                 continue
-            base_text = _STEP_LABELS[event.step]
+
+            base = _STEP_LABELS[event.step]
+
+            # Progress bar — only during UDS_DISCOVERY sweep
+            if event.step == InitStep.UDS_DISCOVERY and event.progress is not None:
+                bar = _progress_bar(event.progress)
+                pct = int(event.progress * 100)
+                label.update(f" ⏳  {base}  {bar}  {pct:3d}%   ({event.detail})")
+                continue
+
             if event.error:
-                marker = "✗"
-                text = f"{base_text}  —  {event.error}"
                 label.add_class("splash-step-error")
+                label.update(f" ✗  {base}  —  {event.error}")
             elif event.done:
-                marker = "✓"
-                text = f"{base_text}  —  {event.detail}" if event.detail else base_text
+                detail = f"  —  {event.detail}" if event.detail else ""
+                label.update(f" ✓  {base}{detail}")
             else:
-                marker = "⏳"
-                text = f"{base_text}  —  {event.detail}" if event.detail else base_text
-            label.update(f" {marker}  {text}")
+                detail = f"  —  {event.detail}" if event.detail else ""
+                label.update(f" ⏳  {base}{detail}")
