@@ -91,8 +91,8 @@ class MainScreen(Screen[None]):
     """Single persistent screen housing all panes."""
 
     BINDINGS = [
-        Binding("left", "prev_tab", "← prev", show=True),
-        Binding("right", "next_tab", "→ next", show=True),
+        Binding("left", "prev_tab", "← prev", show=True, priority=True),
+        Binding("right", "next_tab", "→ next", show=True, priority=True),
         Binding("q", "app.quit", "Quit", show=True),
     ]
 

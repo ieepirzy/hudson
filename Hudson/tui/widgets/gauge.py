@@ -63,7 +63,7 @@ class Gauge(Widget):
     Gauge {
         border: round $primary 40%;
         padding: 0;
-        height: 100%;
+        height: 1fr;
         layout: vertical;
     }
     Gauge.gauge--disabled {
@@ -100,7 +100,6 @@ class Gauge(Widget):
         padding: 0 1;
         opacity: 0.3;
         text-align: right;
-        font-size: 80%;
     }
     """
 
