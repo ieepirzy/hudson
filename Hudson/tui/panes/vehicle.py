@@ -1,44 +1,36 @@
-"""Vehicle info pane — static display of init result."""
+"""Vehicle info pane — identity header + scrollable PID discovery table."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import DataTable, Static
 
 from ...core.init import InitResult
 
 
 class VehiclePane(Widget):
-    """Display vehicle identity and connection details."""
+    """Vehicle identity block + full PID table."""
 
     DEFAULT_CSS = """
     VehiclePane {
         height: 1fr;
-        padding: 1 2;
+        layout: vertical;
+        padding: 0;
     }
 
-    .vehicle-section {
-        border: round $primary 50%;
-        padding: 1 2;
-        margin-bottom: 1;
+    #vehicle-header {
         height: auto;
+        border: round $primary 50%;
+        padding: 0 2;
+        margin: 1 2;
     }
 
-    .vehicle-key {
-        color: $text-muted;
-        width: 20;
-    }
-
-    .vehicle-value {
-        color: $accent;
-        text-style: bold;
-    }
-
-    .vehicle-row {
-        height: 1;
-        layout: horizontal;
+    #pid-table {
+        height: 1fr;
+        margin: 0 2 1 2;
+        border: round $primary 40%;
     }
     """
 
@@ -47,18 +39,36 @@ class VehiclePane(Widget):
         self._init = init_result
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="vehicle-section"):
-            yield Static("[bold]Vehicle Identity[/bold]")
-            yield self._row("VIN", self._init.vin or "—")
-            yield self._row("Manufacturer", self._init.manufacturer_name)
+        vin = self._init.vin or "—"
+        mfr = self._init.manufacturer_name
+        proto = self._init.protocol_name or "—"
+        n = len(self._init.supported_commands)
+        yield Static(
+            f"[bold]VIN[/]  [cyan]{vin}[/]   "
+            f"[bold]Mfr[/]  [cyan]{mfr}[/]   "
+            f"[bold]Protocol[/]  [cyan]{proto}[/]   "
+            f"[bold]PIDs[/]  [cyan]{n}[/]",
+            id="vehicle-header",
+        )
+        yield DataTable(id="pid-table", cursor_type="row", zebra_stripes=True)
 
-        with Vertical(classes="vehicle-section"):
-            yield Static("[bold]Connection[/bold]")
-            yield self._row("Protocol", self._init.protocol_name or "—")
-            yield self._row("Supported PIDs", str(len(self._init.supported_commands)))
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_column("Mode", width=6)
+        table.add_column("PID ", width=6)
+        table.add_column("Name", width=22)
+        table.add_column("Description")
 
-    def _row(self, key: str, value: str) -> Widget:
-        from textual.containers import Horizontal
-        row = Horizontal(classes="vehicle-row")
-        row._nodes  # touch to init
-        return Static(f"  {key:<20} {value}", classes="vehicle-value")
+        cmds = sorted(
+            self._init.supported_commands,
+            key=lambda c: (
+                c.command[0] if c.command else 0xFF,
+                c.command[1] if len(c.command) > 1 else 0xFF,
+            ),
+        )
+        for cmd in cmds:
+            mode_byte = cmd.command[0] if cmd.command else None
+            pid_byte = cmd.command[1] if len(cmd.command) > 1 else None
+            mode = f"{mode_byte:02X}" if mode_byte is not None else "—"
+            pid = f"{pid_byte:02X}" if pid_byte is not None else "—"
+            table.add_row(mode, pid, cmd.name, cmd.desc)
