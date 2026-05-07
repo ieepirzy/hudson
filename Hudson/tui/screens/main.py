@@ -29,8 +29,8 @@ from Hudson.tui.panes.dashboard import DashboardPane
 from Hudson.tui.panes.dtcs import DtcPane
 from Hudson.tui.panes.log import LogPane
 from Hudson.tui.panes.vehicle import VehiclePane
+from Hudson.tui.widgets.gauge import GAUGE_CATALOG
 
-from Hudson.core.poller import PollSpec
 import obd
 
 log = logging.getLogger(__name__)
@@ -152,17 +152,12 @@ class MainScreen(Screen[None]):
             yield VehiclePane(self._init, id="vehicle")
 
     async def on_mount(self) -> None:
-        DEFAULT_POLL_SPECS: list[PollSpec] = [
-            PollSpec(obd.commands.RPM, 0.1),
-            PollSpec(obd.commands.SPEED, 0.1),
-            PollSpec(obd.commands.THROTTLE_POS, 0.1),
-            PollSpec(obd.commands.COOLANT_TEMP, 1.0),
-            PollSpec(obd.commands.INTAKE_TEMP, 1.0),
-            PollSpec(obd.commands.ENGINE_LOAD, 0.5),
-        ]
-
         supported_names = {c.name for c in self._init.supported_commands}
-        active_specs = [s for s in DEFAULT_POLL_SPECS if s.command.name in supported_names]
+        active_specs = [
+            PollSpec(getattr(obd.commands, pid), cfg.interval)
+            for pid, cfg in GAUGE_CATALOG.items()
+            if pid in supported_names and hasattr(obd.commands, pid)
+        ]
 
         if active_specs:
             self._poller = Poller(self._connection, active_specs, self._queue)

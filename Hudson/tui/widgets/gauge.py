@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 
 from textual.app import ComposeResult
 from textual.reactive import reactive
@@ -29,28 +30,57 @@ def _spark(history: deque[float], max_val: float) -> str:
 def _bar(value: float, max_val: float) -> str:
     if max_val == 0:
         return BAR_EMPTY * BAR_WIDTH
-    pct = min(1.0, value / max_val)
+    pct = min(1.0, max(0.0, value) / max_val)
     filled = round(pct * BAR_WIDTH)
     return BAR_FULL * filled + BAR_EMPTY * (BAR_WIDTH - filled)
 
 
-# Color per gauge type — maps to Textual CSS color names
-GAUGE_COLORS: dict[str, str] = {
-    "RPM":          "dodgerblue",
-    "SPEED":        "cyan",
-    "THROTTLE_POS": "gold",
-    "COOLANT_TEMP": "tomato",
-    "INTAKE_TEMP":  "limegreen",
-    "ENGINE_LOAD":  "mediumpurple",
-}
+@dataclass(frozen=True)
+class GaugeConfig:
+    """Display + polling config for one PID."""
 
-GAUGE_MAXES: dict[str, float] = {
-    "RPM":          6000,
-    "SPEED":        200,
-    "THROTTLE_POS": 100,
-    "COOLANT_TEMP": 130,
-    "INTAKE_TEMP":  80,
-    "ENGINE_LOAD":  100,
+    label: str
+    unit: str
+    max_val: float
+    color: str
+    interval: float  # poll interval in seconds
+
+
+# Single source of truth for every PID that can appear on the dashboard.
+# Keys must match obd.commands.<name> exactly.
+# Order determines left-to-right, top-to-bottom display priority.
+GAUGE_CATALOG: dict[str, GaugeConfig] = {
+    # ── fast (0.1 s) ────────────────────────────────────────────────
+    "RPM":                      GaugeConfig("RPM",           "rpm",  6000, "dodgerblue",     0.1),
+    "SPEED":                    GaugeConfig("Speed",         "km/h",  200, "cyan",            0.1),
+    "THROTTLE_POS":             GaugeConfig("Throttle",      "%",     100, "gold",            0.1),
+    "RELATIVE_THROTTLE_POS":    GaugeConfig("Throttle Rel",  "%",     100, "khaki",           0.1),
+    "ACCELERATOR_POS_D":        GaugeConfig("Accel D",       "%",     100, "lightseagreen",   0.1),
+    "ACCELERATOR_POS_E":        GaugeConfig("Accel E",       "%",     100, "mediumseagreen",  0.1),
+    "THROTTLE_ACTUATOR":        GaugeConfig("Throttle Act",  "%",     100, "lightsalmon",     0.1),
+    # ── medium (0.5 s) ──────────────────────────────────────────────
+    "ENGINE_LOAD":              GaugeConfig("Engine Load",   "%",     100, "mediumpurple",    0.5),
+    "ABSOLUTE_LOAD":            GaugeConfig("Abs Load",      "%",     100, "plum",            0.5),
+    "MAF":                      GaugeConfig("MAF",           "g/s",   655, "deepskyblue",     0.5),
+    "SHORT_FUEL_TRIM_1":        GaugeConfig("Fuel Trim S1",  "%",      50, "orange",          0.5),
+    "LONG_FUEL_TRIM_1":         GaugeConfig("Fuel Trim L1",  "%",      50, "darkorange",      0.5),
+    # ── slow (1 s) ──────────────────────────────────────────────────
+    "COOLANT_TEMP":             GaugeConfig("Coolant",       "°C",    130, "tomato",          1.0),
+    "INTAKE_TEMP":              GaugeConfig("Intake Air",    "°C",     80, "limegreen",       1.0),
+    "AMBIENT_AIR_TEMP":         GaugeConfig("Ambient",       "°C",     60, "palegreen",       1.0),
+    "INTAKE_PRESSURE":          GaugeConfig("Intake MAP",    "kPa",   255, "slateblue",       1.0),
+    "TIMING_ADVANCE":           GaugeConfig("Timing Adv",    "°",      64, "yellow",          1.0),
+    "COMMANDED_EQUIV_RATIO":    GaugeConfig("Lambda",        "",        2, "orchid",          1.0),
+    "COMMANDED_EGR":            GaugeConfig("EGR Cmd",       "%",     100, "rosybrown",       1.0),
+    # ── very slow (5 s) ─────────────────────────────────────────────
+    "FUEL_LEVEL":               GaugeConfig("Fuel Level",    "%",     100, "darkorange",      5.0),
+    "BAROMETRIC_PRESSURE":      GaugeConfig("Baro",          "kPa",   110, "steelblue",       5.0),
+    "CONTROL_MODULE_VOLTAGE":   GaugeConfig("Battery",       "V",      16, "greenyellow",     5.0),
+    "CATALYST_TEMP_B1S1":       GaugeConfig("Cat B1S1",      "°C",   1300, "firebrick",       5.0),
+    "CATALYST_TEMP_B2S1":       GaugeConfig("Cat B2S1",      "°C",   1300, "crimson",         5.0),
+    "OIL_TEMP":                 GaugeConfig("Oil Temp",      "°C",    150, "coral",           5.0),
+    "ENGINE_FUEL_RATE":         GaugeConfig("Fuel Rate",     "L/h",   200, "lightblue",       5.0),
+    "HYBRID_BATTERY_REMAINING": GaugeConfig("HV Battery",    "%",     100, "lime",            5.0),
 }
 
 
@@ -64,6 +94,7 @@ class Gauge(Widget):
         border: round $primary 40%;
         padding: 0;
         height: 1fr;
+        min-height: 5;
         layout: vertical;
     }
     Gauge.gauge--disabled {
@@ -73,17 +104,6 @@ class Gauge(Widget):
     .gauge--header {
         height: 1;
         padding: 0 1;
-        layout: horizontal;
-    }
-    .gauge--label {
-        text-style: bold;
-        width: 1fr;
-        opacity: 0.6;
-    }
-    .gauge--reading {
-        text-align: right;
-        text-style: bold;
-        width: auto;
     }
     .gauge--spark {
         height: 1fr;
@@ -105,18 +125,17 @@ class Gauge(Widget):
 
     def __init__(
         self,
-        label: str,
         pid_name: str,
+        config: GaugeConfig,
         *,
-        unit: str = "",
         widget_id: str | None = None,
     ) -> None:
         super().__init__(id=widget_id)
-        self._label = label
         self._pid_name = pid_name
-        self._unit = unit
-        self._max = GAUGE_MAXES.get(pid_name, 100)
-        self._color = GAUGE_COLORS.get(pid_name, "white")
+        self._label = config.label
+        self._unit = config.unit
+        self._max = config.max_val
+        self._color = config.color
         self._history: deque[float] = deque(maxlen=40)
         self._disabled = False
 
@@ -127,11 +146,7 @@ class Gauge(Widget):
         yield Static(f"0 – {self._max:.0f} {self._unit}", classes="gauge--minmax")
 
     def on_mount(self) -> None:
-        color = self._color
-        self.styles.border = ("round", color)
-        self.query_one("#header", Static).update(
-            f"[bold {color} dim]{self._label.upper()}[/]"
-        )
+        self.styles.border = ("round", self._color)
         self._refresh_display(None)
 
     def watch_value(self, value: float | None) -> None:
@@ -144,7 +159,7 @@ class Gauge(Widget):
     def _refresh_display(self, value: float | None) -> None:
         color = self._color
         if value is None:
-            reading = f"[dim]--[/]"
+            reading = "[dim]--[/]"
             bar_str = f"[dim]{BAR_EMPTY * BAR_WIDTH}[/]"
             spark_str = ""
         else:

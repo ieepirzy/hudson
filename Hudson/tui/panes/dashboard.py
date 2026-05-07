@@ -1,4 +1,4 @@
-"""Dashboard pane — split layout with colored gauges and session stats."""
+"""Dashboard pane — dynamic gauge layout driven by PID discovery."""
 
 from __future__ import annotations
 
@@ -6,30 +6,17 @@ import asyncio
 import logging
 from time import monotonic
 
-import obd
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Static
 
 from Hudson.core.connection import ObdConnection
 from Hudson.core.init import InitResult
 from Hudson.core.poller import Reading
-from Hudson.tui.widgets.gauge import Gauge
+from Hudson.tui.widgets.gauge import GAUGE_CATALOG, Gauge
 
 log = logging.getLogger(__name__)
-
-GAUGE_SPECS = [
-    ("RPM",          "RPM",         "rpm"),
-    ("SPEED",        "Speed",       "km/h"),
-    ("THROTTLE_POS", "Throttle",    "%"),
-    ("COOLANT_TEMP", "Coolant",     "°C"),
-    ("INTAKE_TEMP",  "Intake air",  "°C"),
-    ("ENGINE_LOAD",  "Engine load", "%"),
-]
-
-LEFT_PIDS  = ["RPM", "SPEED", "THROTTLE_POS"]
-RIGHT_PIDS = ["COOLANT_TEMP", "INTAKE_TEMP", "ENGINE_LOAD"]
 
 
 class SessionStats(Static):
@@ -97,7 +84,7 @@ class ConnectionStats(Static):
 
 
 class DashboardPane(Widget):
-    """Split dashboard — 3 tall gauges left, 3 shorter right + stat boxes."""
+    """Split dashboard — gauges auto-discovered from supported PIDs."""
 
     DEFAULT_CSS = """
     DashboardPane {
@@ -131,29 +118,35 @@ class DashboardPane(Widget):
         self._gauges: dict[str, Gauge] = {}
         self._session: SessionStats | None = None
 
+        supported_names = {c.name for c in init_result.supported_commands}
+        # Preserve catalog order; only include PIDs the car actually supports.
+        self._active: list[tuple[str, object]] = [
+            (pid, cfg)
+            for pid, cfg in GAUGE_CATALOG.items()
+            if pid in supported_names
+        ]
+
     def compose(self) -> ComposeResult:
+        mid = (len(self._active) + 1) // 2  # left column gets the larger half
+        left_pids = self._active[:mid]
+        right_pids = self._active[mid:]
+
         with Vertical(id="dash-left"):
-            for pid, label, unit in GAUGE_SPECS:
-                if pid in LEFT_PIDS:
-                    g = Gauge(label, pid, unit=unit, widget_id=f"g-{pid.lower()}")
-                    self._gauges[pid] = g
-                    yield g
+            for pid, cfg in left_pids:
+                g = Gauge(pid, cfg, widget_id=f"g-{pid.lower()}")
+                self._gauges[pid] = g
+                yield g
 
         with Vertical(id="dash-right"):
-            for pid, label, unit in GAUGE_SPECS:
-                if pid in RIGHT_PIDS:
-                    g = Gauge(label, pid, unit=unit, widget_id=f"g-{pid.lower()}")
-                    self._gauges[pid] = g
-                    yield g
+            for pid, cfg in right_pids:
+                g = Gauge(pid, cfg, widget_id=f"g-{pid.lower()}")
+                self._gauges[pid] = g
+                yield g
             self._session = SessionStats()
             yield self._session
             yield ConnectionStats(self._init)
 
     async def on_mount(self) -> None:
-        supported = {c.name for c in self._init.supported_commands}
-        for pid, gauge in self._gauges.items():
-            if pid not in supported:
-                gauge.disable()
         self.run_worker(self._consume(), exclusive=True)
 
     async def _consume(self) -> None:
