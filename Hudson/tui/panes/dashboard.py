@@ -32,7 +32,7 @@ LEFT_PIDS  = ["RPM", "SPEED", "THROTTLE_POS"]
 RIGHT_PIDS = ["COOLANT_TEMP", "INTAKE_TEMP", "ENGINE_LOAD"]
 
 
-class SessionStats(Widget):
+class SessionStats(Static):
     """Small stat box — uptime, polls, errors, DTCs."""
 
     DEFAULT_CSS = """
@@ -41,59 +41,38 @@ class SessionStats(Widget):
         height: auto;
         padding: 0 1;
     }
-    .ss-title {
-        color: $accent;
-        text-style: bold;
-        opacity: 0.5;
-        height: 1;
-    }
-    .ss-row { height: 1; }
-    .ss-ok   { color: limegreen; }
-    .ss-warn { color: gold; }
     """
 
     def __init__(self, dtc_count: int = 0) -> None:
-        super().__init__()
+        super().__init__("")
         self._start = monotonic()
         self._polls = 0
         self._dtc_count = dtc_count
 
-    def compose(self) -> ComposeResult:
-        yield Static("SESSION", classes="ss-title")
-        yield Static(classes="ss-row", id="row-uptime")
-        yield Static(classes="ss-row", id="row-polls")
-        yield Static(classes="ss-row", id="row-errors")
-        yield Static(classes="ss-row", id="row-dtcs")
-
     def on_mount(self) -> None:
-        self._render()
-        self.set_interval(1, self._render)
+        self._refresh_display()
+        self.set_interval(1, self._refresh_display)
 
     def increment_polls(self) -> None:
         self._polls += 1
 
-    def _render(self) -> None:
+    def _refresh_display(self) -> None:
         elapsed = int(monotonic() - self._start)
         h = elapsed // 3600
         m = (elapsed % 3600) // 60
         s = elapsed % 60
         uptime = f"{h:02d}:{m:02d}:{s:02d}"
-        dtc_class = "ss-warn" if self._dtc_count > 0 else "ss-ok"
-        self.query_one("#row-uptime", Static).update(
-            f"[dim]Uptime[/]  [white]{uptime}[/]"
-        )
-        self.query_one("#row-polls", Static).update(
-            f"[dim]Polls[/]  [white]{self._polls:,}[/]"
-        )
-        self.query_one("#row-errors", Static).update(
-            f"[dim]Errors[/]  [limegreen]0[/]"
-        )
-        self.query_one("#row-dtcs", Static).update(
-            f"[dim]DTCs[/]  [{dtc_class}]{self._dtc_count}[/]"
+        dtc_color = "gold" if self._dtc_count > 0 else "limegreen"
+        self.update(
+            f"[bold dim]SESSION[/]\n"
+            f"[dim]Uptime[/]  [white]{uptime}[/]\n"
+            f"[dim]Polls[/]   [white]{self._polls:,}[/]\n"
+            f"[dim]Errors[/]  [limegreen]0[/]\n"
+            f"[dim]DTCs[/]    [{dtc_color}]{self._dtc_count}[/]"
         )
 
 
-class ConnectionStats(Widget):
+class ConnectionStats(Static):
     """Small stat box — port, dongle, status."""
 
     DEFAULT_CSS = """
@@ -102,19 +81,19 @@ class ConnectionStats(Widget):
         height: auto;
         padding: 0 1;
     }
-    .cs-title { color: $accent; text-style: bold; opacity: 0.5; height: 1; }
-    .cs-row { height: 1; }
     """
 
     def __init__(self, init_result: InitResult) -> None:
-        super().__init__()
+        super().__init__("")
         self._init = init_result
 
-    def compose(self) -> ComposeResult:
-        yield Static("CONNECTION", classes="cs-title")
-        yield Static(f"[dim]Port[/]    [white]—[/]", classes="cs-row")
-        yield Static(f"[dim]Dongle[/]  [white]ELM327[/]", classes="cs-row")
-        yield Static(f"[dim]Status[/]  [limegreen]Connected[/]", classes="cs-row")
+    def on_mount(self) -> None:
+        self.update(
+            f"[bold dim]CONNECTION[/]\n"
+            f"[dim]Port[/]    [white]—[/]\n"
+            f"[dim]Dongle[/]  [white]ELM327[/]\n"
+            f"[dim]Status[/]  [limegreen]Connected[/]"
+        )
 
 
 class DashboardPane(Widget):
