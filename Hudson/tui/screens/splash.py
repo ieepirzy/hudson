@@ -106,9 +106,8 @@ class SplashScreen(Screen[InitResult]):
             self.app.exit(message=f"Init failed: {exc}")
             return
 
-        # Fire background UDS priority-2 sweep before dismissing.
-        if result.uds_discovery is not None:
-            asyncio.create_task(result.uds_discovery.run_priority2_background())
+        # Priority-2 background sweep is started by MainScreen after it mounts,
+        # so it holds the task reference and can cancel on exit.
 
         await asyncio.sleep(0.2)
         consumer.cancel()

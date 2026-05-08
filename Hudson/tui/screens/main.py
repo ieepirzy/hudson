@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from time import monotonic
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.widgets import ContentSwitcher
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Static
@@ -34,6 +35,46 @@ from Hudson.tui.widgets.gauge import GAUGE_CATALOG
 import obd
 
 log = logging.getLogger(__name__)
+
+_SCAN_BAR_WIDTH = 16
+_PROGRESS_UPDATE_INTERVAL = 50  # update UI every N identifiers to avoid flooding
+
+
+class UdsScanStrip(Static):
+    """One-line footer showing UDS priority-2 background scan progress and ETA."""
+
+    DEFAULT_CSS = """
+    UdsScanStrip {
+        height: 1;
+        background: $surface-darken-2;
+        color: $text-muted;
+        padding: 0 1;
+        display: none;
+    }
+    UdsScanStrip.--active {
+        display: block;
+    }
+    """
+
+    def show_scanning(self, current: int, total: int, responding: int, elapsed: float) -> None:
+        self.add_class("--active")
+        rate = current / elapsed if elapsed > 0 else 1.0
+        eta_s = (total - current) / rate if rate > 0 else 0.0
+        if eta_s < 60:
+            eta = f"{int(eta_s)}s"
+        elif eta_s < 3600:
+            eta = f"{int(eta_s / 60)}m"
+        else:
+            eta = f"{int(eta_s / 3600)}h{int((eta_s % 3600) / 60):02d}m"
+        pct = int(current / total * 100)
+        filled = round(current / total * _SCAN_BAR_WIDTH)
+        bar = f"[{'█' * filled}{'░' * (_SCAN_BAR_WIDTH - filled)}]"
+        self.update(f" UDS scan  {bar}  {pct:3d}%   ETA {eta}   {responding} found")
+
+    def show_complete(self, responding: int) -> None:
+        self.add_class("--active")
+        self.update(f" UDS scan  complete ✓   {responding} identifiers found")
+
 
 TABS: list[tuple[str, str]] = [
     ("dashboard", "Dashboard"),
@@ -131,6 +172,9 @@ class MainScreen(Screen[None]):
         self._poller: Poller | None = None
         self._tab_ids = [t[0] for t in TABS]
         self._active_idx = 0
+        self._uds_task: asyncio.Task[None] | None = None
+        self._uds_responding = 0
+        self._uds_start = 0.0
 
     def compose(self) -> ComposeResult:
         info = (
@@ -151,6 +195,8 @@ class MainScreen(Screen[None]):
             yield LogPane(id="log")
             yield VehiclePane(self._init, id="vehicle")
 
+        yield UdsScanStrip(id="uds-strip")
+
     async def on_mount(self) -> None:
         supported_names = {c.name for c in self._init.supported_commands}
         active_specs = [
@@ -163,9 +209,43 @@ class MainScreen(Screen[None]):
             self._poller = Poller(self._connection, active_specs, self._queue)
             await self._poller.start()
 
+        if self._init.uds_discovery is not None:
+            self._uds_start = monotonic()
+            self._uds_task = asyncio.create_task(
+                self._init.uds_discovery.run_priority2_background(
+                    on_progress=self._on_uds_progress,
+                )
+            )
+            self._uds_task.add_done_callback(self._on_uds_done)
+
     async def on_unmount(self) -> None:
         if self._poller:
             await self._poller.stop()
+        if self._uds_task is not None and not self._uds_task.done():
+            self._uds_task.cancel()
+            try:
+                await self._uds_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _on_uds_progress(
+        self, current: int, total: int, _identifier: int, responded: bool
+    ) -> None:
+        if responded:
+            self._uds_responding += 1
+        if current % _PROGRESS_UPDATE_INTERVAL == 0 or current == total:
+            elapsed = monotonic() - self._uds_start
+            self.query_one(UdsScanStrip).show_scanning(
+                current, total, self._uds_responding, elapsed
+            )
+
+    def _on_uds_done(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled() or task.exception() is not None:
+            return
+        try:
+            self.query_one(UdsScanStrip).show_complete(self._uds_responding)
+        except Exception:
+            pass
 
     def action_next_tab(self) -> None:
         self._active_idx = (self._active_idx + 1) % len(self._tab_ids)
