@@ -10,7 +10,7 @@ import pytest
 
 from Hudson.core.kwp2000 import KwpSession
 from Hudson.manufacturers.volvo import (
-    MOCK_VOLVO_KWP_RESPONSES,
+    MOCK_KWP_RESPONSES,
     VOLVO_BLOCKS,
     _byte_minus40,
     _byte_pct,
@@ -23,7 +23,7 @@ from tests.fixtures.fake_connection import FakeConnection
 
 def _volvo_session() -> KwpSession:
     """Return a started mock KwpSession loaded with Volvo fixtures."""
-    return KwpSession(FakeConnection(), mock_responses=MOCK_VOLVO_KWP_RESPONSES)
+    return KwpSession(FakeConnection(), mock_responses=MOCK_KWP_RESPONSES)
 
 
 # ── Decoder unit tests ────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ async def test_read_block_with_no_mock_response_returns_none() -> None:
 async def test_mock_responses_match_block_definitions() -> None:
     """Every block ID in VOLVO_BLOCKS should have a corresponding mock entry."""
     for key, block in VOLVO_BLOCKS.items():
-        assert block.block_id in MOCK_VOLVO_KWP_RESPONSES, (
+        assert block.block_id in MOCK_KWP_RESPONSES, (
             f"VOLVO_BLOCKS[{key!r}].block_id=0x{block.block_id:02X} "
-            f"has no entry in MOCK_VOLVO_KWP_RESPONSES"
+            f"has no entry in MOCK_KWP_RESPONSES"
         )

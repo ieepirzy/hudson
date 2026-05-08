@@ -167,6 +167,60 @@ class ObdConnection:
             return bytes(raw[2:])
         return None
 
+    async def send_at(self, cmd: str) -> str:
+        """Send an ELM327 AT command; returns response string best-effort."""
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        def _send() -> str:
+            iface = getattr(self._conn, "interface", getattr(self._conn, "_interface", None))
+            if iface is None:
+                return ""
+            try:
+                msgs = iface.send_and_parse(cmd)
+                return "".join(str(m) for m in msgs) if msgs else ""
+            except Exception:
+                return ""
+
+        async with self._lock:
+            return await asyncio.to_thread(_send)
+
+    async def query_kwp_service(
+        self,
+        service: int,
+        payload: bytes = b"",
+        timeout: float = 0.3,
+    ) -> bytes | None:
+        """Send a KWP2000 service request over the active K-line transport.
+
+        Returns the response bytes (positive-response byte stripped), or None
+        on negative response or no reply.  Only call after send_at("ATSP3").
+        """
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        cmd = OBDCommand(
+            f"KWP_{service:02X}",
+            f"KWP2000 service 0x{service:02X}",
+            bytes([service]) + payload,
+            0,
+            _uds_passthrough,
+            ECU.ALL,
+            False,
+        )
+
+        async with self._lock:
+            resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+
+        if resp.is_null() or resp.value is None:
+            return None
+
+        raw: bytes = resp.value
+        positive = service + 0x40
+        if len(raw) >= 1 and raw[0] == positive:
+            return bytes(raw[1:])
+        return None
+
     async def send_tester_present(self) -> None:
         """Send UDS TesterPresent (0x3E 0x00) keepalive — best-effort, never raises."""
         if self._conn is None:

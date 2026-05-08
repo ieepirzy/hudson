@@ -68,13 +68,20 @@ VOLVO_BLOCKS: dict[str, KwpBlock] = {
     ),
 }
 
+# Standard gate attribute: init sequence checks for kwp_blocks to decide
+# whether to attempt a KWP2000 K-line session for this manufacturer.
+kwp_blocks = VOLVO_BLOCKS
+
 # Mock payloads for VOLVO_BLOCKS — injected into KwpSession when is_mock is True.
 # Values match the FakeConnection waveform-generator defaults for consistency:
 #   RPM=1500 → 0x1770/4, coolant=85°C → raw 125, intake=35°C → raw 75,
 #   throttle≈15% → raw 38, load≈30% → raw 77
-MOCK_VOLVO_KWP_RESPONSES: dict[int, bytes] = {
+MOCK_KWP_RESPONSES: dict[int, bytes] = {
     0x01: bytes([0x17, 0x70, 0x7D, 0x4B, 0x26, 0x4D]),
 }
+
+# Legacy alias for backward-compatibility with existing imports.
+MOCK_VOLVO_KWP_RESPONSES = MOCK_KWP_RESPONSES
 
 
 # ── Query helper ──────────────────────────────────────────────────────────────

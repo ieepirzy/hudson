@@ -46,6 +46,8 @@ class FakeConnection:
         self._connected = False
         self._t0 = monotonic()
         self._dtcs: list[tuple[str, str]] = list(self._INITIAL_DTCS)
+        self._protocol_kline = False
+        self._send_at_history: list[str] = []
         self._supported = {
             obd.commands.RPM,
             obd.commands.SPEED,
@@ -110,6 +112,28 @@ class FakeConnection:
     async def send_tester_present(self) -> None:
         pass
 
+    async def send_at(self, cmd: str) -> str:
+        await asyncio.sleep(0.01)
+        self._send_at_history.append(cmd)
+        if cmd in ("ATSP3", "ATSP4"):
+            self._protocol_kline = True
+        elif cmd == "ATSP0":
+            self._protocol_kline = False
+        return "OK"
+
+    async def query_kwp_service(
+        self,
+        service: int,
+        payload: bytes = b"",
+        timeout: float = 0.15,
+    ) -> bytes | None:
+        await asyncio.sleep(0.01)
+        return None
+
+    @property
+    def protocol_kline(self) -> bool:
+        return self._protocol_kline
+
 
 # Fake UDS positive-response payloads (data bytes only, UDS header stripped).
 _MOCK_UDS_RESPONSES: dict[int, bytes] = {
@@ -142,6 +166,47 @@ _MOCK_TOYOTA_UDS_RESPONSES: dict[int, bytes] = {
 _MOCK_TOYOTA_ENHANCED_LOCAL: dict[int, bytes] = {
     0x10: bytes([0x17, 0x70, 0x7D, 0x4B, 0x26, 0x4D]),
 }
+
+
+# Volvo K-line block responses (data bytes, header stripped).
+# Block 0x01: RPM(2) coolant(1) intake(1) throttle(1) load(1) — same values as
+# MOCK_KWP_RESPONSES in volvo.py so cross-layer assertions stay consistent.
+_MOCK_VOLVO_KWP_DATA: dict[int, bytes] = {
+    0x01: bytes([0x17, 0x70, 0x7D, 0x4B, 0x26, 0x4D]),
+}
+
+
+class FakeVolvoConnection(FakeConnection):
+    """FakeConnection variant with a Volvo VIN, no UDS, and a working K-line session.
+
+    UDS probe (0xF189) returns None so the init sequence falls through to
+    _run_kwp_session.  query_kwp_service(0x10) returns positive so the
+    KwpSession starts.  query_enhanced_local returns Volvo block data.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(vin="YV1RS61T242397765")  # Volvo S60
+
+    async def query_uds(self, service: int, identifier: int, timeout: float = 0.15) -> bytes | None:
+        await asyncio.sleep(0.01)
+        return None  # no UDS — triggers KWP fallback
+
+    async def query_kwp_service(
+        self,
+        service: int,
+        payload: bytes = b"",
+        timeout: float = 0.15,
+    ) -> bytes | None:
+        await asyncio.sleep(0.01)
+        if service == 0x10:  # StartDiagnosticSession → positive
+            return b""
+        if service == 0x20:  # StopDiagnosticSession → positive
+            return b""
+        return None
+
+    async def query_enhanced_local(self, local_id: int, timeout: float = 0.15) -> bytes | None:
+        await asyncio.sleep(0.01)
+        return _MOCK_VOLVO_KWP_DATA.get(local_id)
 
 
 class FakeToyotaConnection(FakeConnection):

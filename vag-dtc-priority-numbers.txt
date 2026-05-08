@@ -1,0 +1,12 @@
+One component of Freeze Frame data is the Fault Priority number as described below:
+
+Number	Meaning
+0	Undefined by manufacturer.
+1	The fault has a strong influence on drivability, immediate stop is required.
+2	The fault requires an immediate service appointment.
+3	The fault doesn't require an immediate service appointment, but it should be corrected with the next service appointment.
+4	The fault recommends an action to be taken, otherwise drivability might be affected.
+5	The fault has no influence on drivability.
+6	The fault has a long term influence on drivability.
+7	The fault has an influence on the comfort functions, but doesn't influence the car's drivability.
+8	General Note

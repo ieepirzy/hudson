@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from Hudson.core.kwp2000 import KwpBlock, KwpField, KwpSession
-from tests.fixtures.fake_connection import FakeConnection
+from tests.fixtures.fake_connection import FakeConnection, FakeVolvoConnection
 
 # Generic test payloads — no manufacturer semantics attached.
 _PAYLOAD_A = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06])
@@ -148,3 +148,40 @@ def test_parse_empty_data_all_fields_none() -> None:
     session = KwpSession(FakeConnection(), mock_responses={})
     defn = KwpBlock(0x01, "Test", (KwpField("x", 0, 1, "unit", _identity_byte),))
     assert session.parse_block(defn, b"") == {"x": None}
+
+
+# ── Real-hardware path (via FakeConnection) ───────────────────────────────────
+
+async def test_real_path_sends_atsp3() -> None:
+    conn = FakeConnection()
+    session = KwpSession(conn, mock_responses=None)
+    # FakeConnection.query_kwp_service returns None → session fails to start
+    await session.start_diagnostic_session()
+    assert "ATSP3" in conn._send_at_history
+
+
+async def test_real_path_restores_atsp0_on_failure() -> None:
+    conn = FakeConnection()
+    session = KwpSession(conn, mock_responses=None)
+    started = await session.start_diagnostic_session()
+    assert started is False
+    assert conn.protocol_kline is False
+    assert "ATSP0" in conn._send_at_history
+
+
+async def test_real_path_starts_when_kwp_service_responds() -> None:
+    conn = FakeVolvoConnection()
+    session = KwpSession(conn, mock_responses=None)
+    started = await session.start_diagnostic_session()
+    assert started is True
+    assert session._started is True
+
+
+async def test_real_path_close_sends_atsp0() -> None:
+    conn = FakeVolvoConnection()
+    session = KwpSession(conn, mock_responses=None)
+    await session.start_diagnostic_session()
+    conn._send_at_history.clear()
+    await session.close()
+    assert "ATSP0" in conn._send_at_history
+    assert session._started is False

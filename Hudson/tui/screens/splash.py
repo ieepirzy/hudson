@@ -40,6 +40,7 @@ _STEP_LABELS: dict[InitStep, str] = {
     InitStep.MANUFACTURER:   "Manufacturer",
     InitStep.ECU_VERSION:    "ECU version",
     InitStep.UDS_DISCOVERY:  "UDS discovery",
+    InitStep.KWP_SESSION:    "KWP2000 session",
     InitStep.SUPPORTED_PIDS: "Supported PIDs",
     InitStep.READY:          "Ready",
 }

@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 from Hudson.core.connection import ObdConnection
 from Hudson.core.ecu_cache import EcuCache
+from Hudson.core.kwp2000 import KwpSession
 from Hudson.core.uds import UdsDiscovery
 from Hudson.core.vin import VinReadError, read_vin
 from Hudson.manufacturers.registry import select_decoder
@@ -49,6 +50,7 @@ class InitStep(Enum):
     MANUFACTURER = auto()
     ECU_VERSION = auto()     # UDS: query 0xF189 for ECU software version
     UDS_DISCOVERY = auto()   # UDS: priority-1 identifier sweep
+    KWP_SESSION = auto()     # KWP2000: K-line session attempt (pre-2007 vehicles)
     SUPPORTED_PIDS = auto()
     READY = auto()
 
@@ -76,6 +78,7 @@ class InitResult:
     ecu_version: str | None = None
     uds_identifiers: list[int] = field(default_factory=list)
     uds_discovery: UdsDiscovery | None = None
+    kwp_session: KwpSession | None = None
 
 
 async def run_init(
@@ -141,6 +144,7 @@ async def run_init(
     else:
         await events.put(InitEvent(InitStep.ECU_VERSION, "not applicable", done=True))
         await events.put(InitEvent(InitStep.UDS_DISCOVERY, "not applicable", done=True))
+        await events.put(InitEvent(InitStep.KWP_SESSION, "not applicable", done=True))
 
     # ── 7. Supported PIDs ────────────────────────────────────────────────────
     await events.put(InitEvent(InitStep.SUPPORTED_PIDS, "probing supported PIDs"))
@@ -194,6 +198,11 @@ async def _run_uds_steps(
         await events.put(
             InitEvent(InitStep.UDS_DISCOVERY, "skipped — falling back to mode 01", done=True)
         )
+        kwp_blocks = getattr(result.manufacturer_module, "kwp_blocks", None)
+        if kwp_blocks is not None:
+            await _run_kwp_session(connection, events, result)
+        else:
+            await events.put(InitEvent(InitStep.KWP_SESSION, "not applicable", done=True))
         return
 
     discovery.ecu_version = ecu_version
@@ -220,6 +229,7 @@ async def _run_uds_steps(
                 done=True,
             )
         )
+        await events.put(InitEvent(InitStep.KWP_SESSION, "not applicable", done=True))
         return
 
     async def _on_progress(current: int, total: int, identifier: int, responded: bool) -> None:
@@ -245,4 +255,31 @@ async def _run_uds_steps(
         log.exception("UDS priority-1 discovery failed")
         await events.put(
             InitEvent(InitStep.UDS_DISCOVERY, "discovery failed", error=str(exc), done=True)
+        )
+    await events.put(InitEvent(InitStep.KWP_SESSION, "not applicable", done=True))
+
+
+async def _run_kwp_session(
+    connection: ObdConnection,
+    events: asyncio.Queue[InitEvent],
+    result: InitResult,
+) -> None:
+    """Attempt a KWP2000 K-line session for manufacturers that expose kwp_blocks."""
+    await events.put(InitEvent(InitStep.KWP_SESSION, "attempting KWP2000 session (ATSP3)"))
+    session = KwpSession(connection)
+    try:
+        started = await session.start_diagnostic_session()
+        if started:
+            result.kwp_session = session
+            await events.put(InitEvent(InitStep.KWP_SESSION, "K-line session active", done=True))
+        else:
+            await session.close()
+            await events.put(
+                InitEvent(InitStep.KWP_SESSION, "no response — K-line unavailable", done=True)
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("KWP2000 session failed")
+        await session.close()
+        await events.put(
+            InitEvent(InitStep.KWP_SESSION, "session failed", error=str(exc), done=True)
         )

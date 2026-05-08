@@ -20,6 +20,7 @@ routine control, or security access services.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from Hudson.core.connection import ObdConnection
+
+# ISO 14230-2 W3/W4: minimum delay after protocol switch before first message.
+_KLINE_SWITCH_DELAY = 0.05
 
 log = logging.getLogger(__name__)
 
@@ -109,19 +113,30 @@ class KwpSession:
             log.debug("KWP2000 mock session started")
             return True
 
-        # TODO: implement real K-line session start.
-        #   1. Send ATSP3 (fast init) or ATSP4 (slow/5-baud init)
-        #   2. ATH1 to enable headers
-        #   3. Frame: [80 F1 10 01 10 92]  (StartDiagnosticSession)
-        #   4. Expect positive response starting with 0x50
-        log.warning("KWP2000 real session start not yet implemented")
-        return False
+        try:
+            await self._connection.send_at("ATSP3")
+            await asyncio.sleep(_KLINE_SWITCH_DELAY)
+            await self._connection.send_at("ATH1")
+            resp = await self._connection.query_kwp_service(0x10, b"\x81")
+            if resp is not None:
+                self._started = True
+                log.info("KWP2000 K-line session started")
+                return True
+            log.warning("KWP2000 StartDiagnosticSession: no positive response")
+            return False
+        finally:
+            if not self._started:
+                await self._connection.send_at("ATSP0")
 
     async def close(self) -> None:
         """Close the session — best-effort, never raises."""
         if self._started and not self.is_mock:
-            # TODO: send StopDiagnosticSession (service 0x20) on real hardware
-            pass
+            try:
+                await self._connection.query_kwp_service(0x20)
+            except Exception:
+                pass
+            finally:
+                await self._connection.send_at("ATSP0")
         self._started = False
         log.debug("KWP2000 session closed")
 
@@ -141,11 +156,9 @@ class KwpSession:
         if self.is_mock:
             return self._mock_responses.get(block_id)  # type: ignore[union-attr]
 
-        # TODO: implement real K-line block read.
-        #   Delegate to self._connection.query_enhanced_local(block_id) once
-        #   the ELM327 is configured for K-line (ATSP3/ATSP4).
-        log.warning("KWP2000 query_block not implemented for block 0x%02X", block_id)
-        return None
+        # After ATSP3, the ELM327 routes mode-0x21 frames over K-line —
+        # query_enhanced_local sends [0x21, block_id] and strips the 0x61 echo.
+        return await self._connection.query_enhanced_local(block_id)
 
     # ── Parsing ───────────────────────────────────────────────────────────────
 
