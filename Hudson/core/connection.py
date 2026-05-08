@@ -133,6 +133,40 @@ class ObdConnection:
             return bytes(raw[3:])
         return None
 
+    async def query_enhanced_local(self, local_id: int, timeout: float = 0.15) -> bytes | None:
+        """Send a mode 0x21 ReadDataByLocalIdentifier request.
+
+        Used for Toyota enhanced data streams over CAN/ISO-TP. Returns the data
+        bytes following the positive-response header (0x61 + local_id), or None
+        on a negative response or no reply.
+
+        Not to be confused with KWP2000 query_block — that uses K-line transport.
+        """
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        cmd = OBDCommand(
+            f"ENH_{local_id:02X}",
+            f"Enhanced Local Identifier 0x{local_id:02X}",
+            bytes([0x21, local_id]),
+            0,
+            _uds_passthrough,
+            ECU.ALL,
+            False,
+        )
+
+        async with self._lock:
+            resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+
+        if resp.is_null() or resp.value is None:
+            return None
+
+        raw: bytes = resp.value
+        # Positive response: 0x61 (= 0x21 + 0x40) + local_id echo + data
+        if len(raw) >= 2 and raw[0] == 0x61 and raw[1] == local_id:
+            return bytes(raw[2:])
+        return None
+
     async def send_tester_present(self) -> None:
         """Send UDS TesterPresent (0x3E 0x00) keepalive — best-effort, never raises."""
         if self._conn is None:

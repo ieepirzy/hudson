@@ -102,6 +102,11 @@ class FakeConnection:
         await asyncio.sleep(0.01)
         return _MOCK_UDS_RESPONSES.get(identifier)
 
+    async def query_enhanced_local(self, local_id: int, timeout: float = 0.15) -> bytes | None:
+        """Return None by default — override in subclasses for manufacturer mocks."""
+        await asyncio.sleep(0.01)
+        return None
+
     async def send_tester_present(self) -> None:
         pass
 
@@ -115,6 +120,47 @@ _MOCK_UDS_RESPONSES: dict[int, bytes] = {
     0xF40B: bytes([0x01, 0x2C]),             # boost actual (kPa)
     0xF40C: bytes([0x01, 0x40]),             # boost specified (kPa)
 }
+
+# Toyota mode 0x22 enhanced PID responses.
+# Identifiers mirror standard mode 01 PID numbers (0x01xx range).
+# Values match the waveform-generator defaults so tests stay consistent:
+#   coolant=85°C → raw 125 (125-40=85), intake=35°C → raw 75,
+#   load≈30% → raw 77 (77/2.55≈30), RPM=1500 → 0x1770 (/4=1500),
+#   speed=40 km/h → 0x28, throttle≈15% → raw 38 (38/2.55≈15)
+_MOCK_TOYOTA_UDS_RESPONSES: dict[int, bytes] = {
+    0xF189: b"1AZ\x00",           # ECU SW version → "1AZ" (engine family)
+    0x0105: bytes([0x7D]),         # coolant:  125 - 40 = 85 °C
+    0x010F: bytes([0x4B]),         # intake:    75 - 40 = 35 °C
+    0x0110: bytes([0x4D]),         # load:      77 / 2.55 ≈ 30 %
+    0x010C: bytes([0x17, 0x70]),   # RPM:    0x1770 / 4 = 1500 rpm
+    0x010D: bytes([0x28]),         # speed:   40 km/h
+    0x0111: bytes([0x26]),         # throttle: 38 / 2.55 ≈ 15 %
+}
+
+# Toyota mode 0x21 local block responses (data bytes, header stripped).
+# Block 0x10: RPM(2) coolant(1) intake(1) throttle(1) load(1)
+_MOCK_TOYOTA_ENHANCED_LOCAL: dict[int, bytes] = {
+    0x10: bytes([0x17, 0x70, 0x7D, 0x4B, 0x26, 0x4D]),
+}
+
+
+class FakeToyotaConnection(FakeConnection):
+    """FakeConnection variant with a Toyota VIN and Toyota-specific mock responses.
+
+    Use this fixture for tests that exercise the Toyota enhanced PID flow
+    (mode 0x22 via query_uds and mode 0x21 via query_enhanced_local).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(vin="JT000000000000001")
+
+    async def query_uds(self, service: int, identifier: int, timeout: float = 0.15) -> bytes | None:
+        await asyncio.sleep(0.01)
+        return _MOCK_TOYOTA_UDS_RESPONSES.get(identifier)
+
+    async def query_enhanced_local(self, local_id: int, timeout: float = 0.15) -> bytes | None:
+        await asyncio.sleep(0.01)
+        return _MOCK_TOYOTA_ENHANCED_LOCAL.get(local_id)
 
 
 def _synthetic_value(cmd: OBDCommand, t: float) -> object:
