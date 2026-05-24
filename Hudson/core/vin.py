@@ -78,8 +78,8 @@ async def read_vin(connection: ObdConnection) -> str:
     if raw is None:
         raise VinReadError("VIN response value was None")
 
-    # python-obd returns VIN as bytes-like or str depending on version.
-    if isinstance(raw, bytes):
+    # python-obd returns VIN as bytes, bytearray, or str depending on decoder version.
+    if isinstance(raw, (bytes, bytearray)):
         vin = raw.decode("ascii", errors="replace").strip()
     else:
         vin = str(raw).strip()

@@ -14,6 +14,7 @@ from textual.widgets import Button, DataTable, Label, Static
 
 from ...core.connection import ObdConnection
 from ...core.dtc import decode_dtc_list
+from ...core.dtc_lookup import lookup_description as dtc_lookup_description
 from ...core.init import InitResult
 
 log = logging.getLogger(__name__)
@@ -187,13 +188,14 @@ class DtcPane(Widget):
                 is_mfr = code[0] == "P" and code[1] in ("1", "3")
                 dtype = "Manufacturer" if is_mfr else "SAE"
 
-                # Manufacturer module gets priority over python-obd's generic desc.
+                # Resolution order: manufacturer module → dtc_lookup DB → python-obd str
                 mfr_desc: str | None = None
                 if self._init.manufacturer_module:
                     mfr_desc = getattr(
                         self._init.manufacturer_module, "lookup_dtc", lambda _: None
                     )(code)
-                description = mfr_desc or obd_desc or "—"
+                db_desc = dtc_lookup_description(code, self._init.manufacturer_name)
+                description = mfr_desc or db_desc or obd_desc or "—"
 
                 table.add_row(code, system, dtype, description)
 
