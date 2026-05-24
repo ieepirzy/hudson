@@ -134,7 +134,7 @@ class MainScreen(Screen[None]):
     BINDINGS = [
         Binding("left", "prev_tab", "← prev", show=True, priority=True),
         Binding("right", "next_tab", "→ next", show=True, priority=True),
-        Binding("q", "app.quit", "Quit", show=True),
+        Binding("q", "app.quit", "Quit", show=True, priority=True),
     ]
 
     DEFAULT_CSS = """

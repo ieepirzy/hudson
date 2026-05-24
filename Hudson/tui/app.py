@@ -21,7 +21,7 @@ class HudsonApp(App[None]):
     CSS_PATH = "app.tcss"
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        Binding("q", "quit", "Quit", priority=True),
     ]
 
     def __init__(self, connection: ObdConnection) -> None:
