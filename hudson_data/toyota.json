@@ -1,0 +1,97 @@
+{
+  "manufacturer": "toyota",
+  "protocol_notes": "Toyota uses mode 0x21 (KWP2000 readDataByLocalIdentifier) on most pre-2015 engines. Newer platforms (2015+) use mode 0x22 (UDS). In Torque Pro notation, '221074' means mode=0x22, PID=0x1074. Engine ECU typically at CAN header 0x700 (request) / 0x7E8 (response). Some modules at different addresses.",
+  "sources": [
+    "gr-zoo.com/threads/pids-reverse-engineered-revisited — GR Yaris PIDs, formulas verified by physically unplugging sensors",
+    "mr2oc.com/threads/data-logging-the-2gr-fe-ecu — RAV4 2GR-FE CAN bus decode, cross-verified with TechStream",
+    "rav4world.com transmission temp threads — formula confirmed against TechStream (158.5F vs 160.5F delta)",
+    "fjcruiserforums.com Toyota specific PIDs — knock correction/feedback",
+    "priuschat.com gen2 Prius custom PIDs"
+  ],
+  "confidence_notes": "Toyota PIDs are more fragmented than VAG. HIGH = formula verified against TechStream or by physical sensor manipulation. MEDIUM = community confirmed working. LOW = single source or inferred.",
+  "important_note": "Toyota mode 0x21 PIDs use KWP2000 service 0x21 (not UDS 0x22). Hudson currently only implements 0x22. A separate query_kwp_local() function is needed for full Toyota support on pre-2015 vehicles. Mode 0x22 PIDs (identifiers >= 0x1000) work with the existing UDS path.",
+  "mode_21_identifiers": {
+    "note": "These require KWP2000 service 0x21, NOT UDS 0x22. Hudson TODO: implement query_kwp_local()",
+    "0x21D9": {
+      "label": "Transmission fluid temperature (torque converter)",
+      "formula": "((A*256+B)/256 - 40) * 1.8 + 32",
+      "formula_celsius": "(A*256+B)/256 - 40",
+      "unit": "°C",
+      "bytes": 8,
+      "ecu_header": "0x700",
+      "response_header": "0x7E8",
+      "confidence": "HIGH",
+      "notes": "Verified against TechStream on RAV4 2GR-FE. Response is multi-frame (8 bytes). A/B are bytes 1/2, E/F are bytes 5/6 (second sensor, may be 0x0000 if not fitted). Source: MR2OC RAV4 CAN decode.",
+      "variables": {
+        "torque_converter_temp": "A/B (bytes 1-2)",
+        "pan_temp": "E/F (bytes 5-6, may not be present on all variants)"
+      }
+    },
+    "0x21B2": {
+      "label": "Knock correction / feedback values",
+      "formula_kclv": "A*256+B / 32 - 64",
+      "formula_kfbv": "(D - 256) / 32",
+      "unit": "degrees",
+      "ecu_header": "0x700",
+      "confidence": "MEDIUM",
+      "notes": "Knock Correction Learn Value and Knock Feedback Value. Verified visible in TechStream. Source: FJCruiser forums."
+    }
+  },
+  "mode_22_identifiers": {
+    "note": "These use UDS service 0x22 and work with Hudson's existing query_uds(). Used on newer Toyota platforms (approx 2015+).",
+    "0x1074": {
+      "label": "Engine oil pressure",
+      "formula": "(A*256+B) / 1280",
+      "unit": "bar",
+      "bytes": 2,
+      "ecu_header": "0x700",
+      "confidence": "HIGH",
+      "notes": "Verified on GR Yaris by community. Source: gr-zoo.com PIDs thread."
+    },
+    "0x1638": {
+      "label": "Transmission oil temperature",
+      "formula": "A + B/256 - 40",
+      "unit": "°C",
+      "bytes": 2,
+      "ecu_header": "0x700",
+      "confidence": "HIGH",
+      "notes": "Verified on GR Yaris, reading ~50°C at operating temp, ~60°C after spirited driving. Source: gr-zoo.com PIDs thread."
+    },
+    "0x1021": {
+      "label": "Battery / alternator voltage",
+      "formula": "A / 10",
+      "unit": "V",
+      "bytes": 1,
+      "ecu_header": "0x7C0",
+      "confidence": "HIGH",
+      "notes": "B+ alternator voltage. Source: gr-zoo.com GR Yaris PIDs, header 7C0 (combination meter ECU)."
+    },
+    "0x1059": {
+      "label": "Accelerator pedal position",
+      "formula": "(A - 41) / 1.42",
+      "unit": "%",
+      "bytes": 1,
+      "ecu_header": "0x700",
+      "confidence": "MEDIUM",
+      "notes": "Source: gr-zoo.com GR Yaris reverse engineering thread."
+    }
+  },
+  "multi_value_pids": {
+    "note": "Toyota often packs many values into a single PID response. 0x2101 on Prius contains 26 values including RPM, coolant temp, MAF, throttle, speed, battery voltage all in one response.",
+    "0x2101": {
+      "label": "Combined engine data block (Prius/hybrid)",
+      "ecu_header": "0x700",
+      "confidence": "MEDIUM",
+      "notes": "Hybrid-specific combined data block. Not applicable to conventional RAV4. Source: Torque Pro Prius predefined PIDs."
+    }
+  },
+  "ecu_can_addresses": {
+    "engine": {"request": "0x700", "response": "0x7E8"},
+    "combination_meter": {"request": "0x7C0", "response": "0x7C8"},
+    "navigation": {"request": "0x7D0", "response": "0x7D8"}
+  },
+  "health_check_notes": {
+    "transmission_temp": "Normal operating: 50-90°C. High load: up to 120°C acceptable. Above 150°C indicates potential issue.",
+    "oil_pressure": "Idle warm: ~1.5-2.5 bar typical. Under load: 3.5-5 bar typical."
+  }
+}

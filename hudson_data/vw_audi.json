@@ -1,0 +1,212 @@
+{
+  "manufacturer": "vw_audi",
+  "protocol_notes": "VAG post-2008 uses UDS service 0x22 (ReadDataByIdentifier). Engine ECU CAN address 0x7E0, response 0x7E8. Transmission 0x7E1/0x7E9.",
+  "sources": [
+    "Ross-Tech Wiki TDI page (ross-tech.com/vag-com/cars/tdi.html)",
+    "ConnorHowell/vag-uds-ids (github.com) — CAN address table",
+    "TDIClub forums — boost group 011 documented",
+    "VWVortex — boost mbar absolute confirmed (subtract ~1013 for gauge)"
+  ],
+  "confidence_notes": "Formulas marked HIGH are cross-verified by multiple community sources. MEDIUM have single source. LOW are inferred from measuring block equivalents and need hardware verification.",
+  "standardized_identifiers": {
+    "0xF110": {
+      "label": "VIN",
+      "formula": "ascii",
+      "unit": "",
+      "bytes": 20,
+      "confidence": "HIGH",
+      "notes": "Standardized UDS identifier, works on all manufacturers"
+    },
+    "0xF18C": {
+      "label": "ECU serial number",
+      "formula": "ascii",
+      "unit": "",
+      "bytes": 4,
+      "confidence": "HIGH"
+    },
+    "0xF187": {
+      "label": "ECU part number",
+      "formula": "ascii",
+      "unit": "",
+      "bytes": 11,
+      "confidence": "HIGH"
+    },
+    "0xF189": {
+      "label": "ECU software version",
+      "formula": "ascii",
+      "unit": "",
+      "bytes": 4,
+      "confidence": "HIGH",
+      "notes": "Used as cache key in Hudson ECU cache"
+    },
+    "0xF190": {
+      "label": "VIN (UDS standard location)",
+      "formula": "ascii",
+      "unit": "",
+      "bytes": 17,
+      "confidence": "HIGH"
+    },
+    "0xF191": {
+      "label": "ECU hardware version",
+      "formula": "ascii",
+      "unit": "",
+      "bytes": 4,
+      "confidence": "HIGH"
+    }
+  },
+  "engine_identifiers": {
+    "0xF40B": {
+      "label": "Boost pressure (actual)",
+      "formula": "uint16_be",
+      "unit": "mbar absolute",
+      "bytes": 2,
+      "confidence": "MEDIUM",
+      "notes": "Absolute pressure — subtract atmospheric (~1013 mbar) for gauge pressure. Max ~2540 mbar (22.3 psi gauge). Source: VWVortex boost threads, Ross-Tech measuring block 115 equivalent.",
+      "display_formula": "raw - 1013",
+      "display_unit": "mbar gauge"
+    },
+    "0xF40C": {
+      "label": "Boost pressure (specified/requested)",
+      "formula": "uint16_be",
+      "unit": "mbar absolute",
+      "bytes": 2,
+      "confidence": "MEDIUM",
+      "notes": "Target boost from ECU map. Compare with 0xF40B for wastegate/turbo health. Source: Ross-Tech measuring block 115-3/115-4 equivalent.",
+      "display_formula": "raw - 1013",
+      "display_unit": "mbar gauge"
+    },
+    "0xF404": {
+      "label": "MAF (actual)",
+      "formula": "uint16_be / 100",
+      "unit": "mg/stroke",
+      "bytes": 2,
+      "confidence": "MEDIUM",
+      "notes": "At idle should be ~370 mg/stroke (TDI). At 3000 RPM WOT should be 850-900 mg/stroke for healthy TDI. Source: Ross-Tech TDI page group 003, TDIClub.",
+      "health_check": {
+        "idle_min": 200,
+        "idle_max": 450,
+        "wot_3000rpm_min": 800
+      }
+    },
+    "0xF405": {
+      "label": "MAF (specified)",
+      "formula": "uint16_be / 100",
+      "unit": "mg/stroke",
+      "bytes": 2,
+      "confidence": "MEDIUM",
+      "notes": "ECU target MAF. Compare with 0xF404 — large deviation indicates MAF sensor issue or intake leak."
+    },
+    "0xF406": {
+      "label": "Fuel trim (additive, idle)",
+      "formula": "int16_be / 100",
+      "unit": "%",
+      "bytes": 2,
+      "confidence": "MEDIUM",
+      "notes": "Should be between -10% and +10%. Above +25% usually indicates bad MAF or intake leak. Source: Ross-Tech measuring block 032 field 1 equivalent."
+    },
+    "0xF407": {
+      "label": "Fuel trim (multiplicative, part load)",
+      "formula": "int16_be / 100",
+      "unit": "%",
+      "bytes": 2,
+      "confidence": "MEDIUM",
+      "notes": "Should be between -10% and +10%. Source: Ross-Tech measuring block 032 field 2 equivalent."
+    },
+    "0xF40D": {
+      "label": "Exhaust gas temperature (EGT)",
+      "formula": "uint16_be / 10 - 40",
+      "unit": "°C",
+      "bytes": 2,
+      "confidence": "LOW",
+      "notes": "Formula inferred from common VAG temperature scaling. Needs hardware verification. Not available on all engines."
+    },
+    "0xF408": {
+      "label": "Oil temperature",
+      "formula": "uint16_be - 40",
+      "unit": "°C",
+      "bytes": 2,
+      "confidence": "LOW",
+      "notes": "Formula inferred. Not exposed on all ECU variants. Needs verification."
+    },
+    "0xF40E": {
+      "label": "Injection quantity (actual)",
+      "formula": "uint16_be / 100",
+      "unit": "mg/stroke",
+      "bytes": 2,
+      "confidence": "LOW",
+      "notes": "Diesel only. Actual fuel injected per stroke."
+    },
+    "0xF40F": {
+      "label": "Injection quantity (specified)",
+      "formula": "uint16_be / 100",
+      "unit": "mg/stroke",
+      "bytes": 2,
+      "confidence": "LOW",
+      "notes": "Diesel only. ECU target injection quantity."
+    },
+    "0xF401": {
+      "label": "Engine speed (RPM)",
+      "formula": "uint16_be / 4",
+      "unit": "rpm",
+      "bytes": 2,
+      "confidence": "MEDIUM",
+      "notes": "UDS equivalent of mode 01 PID 0C. Formula same as OBD2 standard."
+    },
+    "0xF402": {
+      "label": "Vehicle speed",
+      "formula": "uint16_be",
+      "unit": "km/h",
+      "bytes": 2,
+      "confidence": "MEDIUM"
+    },
+    "0xF403": {
+      "label": "Coolant temperature",
+      "formula": "uint8 - 40",
+      "unit": "°C",
+      "bytes": 1,
+      "confidence": "MEDIUM",
+      "notes": "Standard offset formula, same as OBD2 mode 01 PID 05."
+    },
+    "0xF409": {
+      "label": "Throttle position",
+      "formula": "uint8 * 100 / 255",
+      "unit": "%",
+      "bytes": 1,
+      "confidence": "MEDIUM"
+    },
+    "0xF410": {
+      "label": "Intake air temperature",
+      "formula": "uint8 - 40",
+      "unit": "°C",
+      "bytes": 1,
+      "confidence": "MEDIUM"
+    },
+    "0xF411": {
+      "label": "Engine load",
+      "formula": "uint8 * 100 / 255",
+      "unit": "%",
+      "bytes": 1,
+      "confidence": "MEDIUM"
+    }
+  },
+  "transmission_identifiers": {
+    "0xF600": {
+      "label": "Transmission fluid temperature",
+      "formula": "uint8 - 40",
+      "unit": "°C",
+      "bytes": 1,
+      "confidence": "LOW",
+      "notes": "Range varies by identifier. Needs verification on specific DSG/auto variants."
+    }
+  },
+  "ecu_can_addresses": {
+    "engine": {"request": "0x7E0", "response": "0x7E8"},
+    "transmission": {"request": "0x7E1", "response": "0x7E9"},
+    "abs_brake": {"request": "0x713", "response": "0x77D"},
+    "airbag": {"request": "0x715", "response": "0x77F"},
+    "dashboard": {"request": "0x714", "response": "0x77E"},
+    "central_electrics": {"request": "0x70E", "response": "0x778"},
+    "gateway": {"request": "0x710", "response": "0x77A"},
+    "ac": {"request": "0x746", "response": "0x7B0"}
+  }
+}
