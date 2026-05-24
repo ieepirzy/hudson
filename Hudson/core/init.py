@@ -222,6 +222,7 @@ async def _run_uds_steps(
         cached = await cache.get_discovered_identifiers(discovery.ecu_version)
         ids = [r["identifier"] for r in cached if r["responded"]]
         result.uds_identifiers = ids
+        discovery._p1_responding = ids  # allow priority-2 background sweep to proceed
         await events.put(
             InitEvent(
                 InitStep.UDS_DISCOVERY,
