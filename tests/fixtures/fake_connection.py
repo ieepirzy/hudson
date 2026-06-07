@@ -257,5 +257,20 @@ def _make_response(cmd: OBDCommand, value: object) -> OBDResponse:
     return resp
 
 
+class FakeNoMode09VinConnection(FakeConnection):
+    """FakeConnection where mode 09 VIN returns null, forcing chain fallback to UDS.
+
+    Used to exercise the VIN resolution chain beyond the first step without
+    real hardware. UDS 0xF190 returns the VIN (step 2 succeeds).
+    """
+
+    async def query(self, cmd: "OBDCommand", force: bool = False) -> OBDResponse:
+        import obd as _obd
+        if cmd is _obd.commands.VIN:
+            # Return a null response — is_null() returns True when messages is empty.
+            return OBDResponse(command=cmd, messages=[])
+        return await super().query(cmd, force=force)
+
+
 class _FakeMessage:
     """Sentinel — `is_null` only checks truthiness of the messages list."""

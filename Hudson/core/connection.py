@@ -76,6 +76,32 @@ class ObdConnection:
             raise ConnectionError(f"failed to connect to ELM327: {status}")
 
         log.info("connected: protocol=%s port=%s", self._conn.protocol_name(), self._conn.port_name())
+        await self._log_adapter_state()
+
+    async def _log_adapter_state(self) -> None:
+        """Read and log key ELM327 AT registers after connection.
+
+        These are read-only queries that don't affect adapter state. They
+        produce a timestamped snapshot in the log file so we can diagnose
+        adapter misconfiguration without re-plugging.
+        """
+        dp = await self.send_at("ATDP")
+        rv = await self.send_at("ATRV")
+        log.info(
+            "ELM327 state after init — protocol: %r  voltage: %r",
+            dp.strip(),
+            rv.strip(),
+        )
+        if self._config.protocol and not dp.strip().startswith("AUTO"):
+            # If a specific protocol was requested, log if the adapter is in
+            # auto-detect mode (may indicate the requested protocol was ignored).
+            pass  # informational only; python-obd negotiated successfully
+        if rv.strip() in ("", "?", "NODATA"):
+            log.warning(
+                "ELM327: voltage read returned %r — "
+                "adapter may not be seeing ignition power",
+                rv.strip(),
+            )
 
     async def close(self) -> None:
         if self._conn is None:
@@ -177,11 +203,13 @@ class ObdConnection:
         def _send() -> str:
             iface = getattr(self._conn, "interface", getattr(self._conn, "_interface", None))
             if iface is None:
+                log.warning("send_at(%r): no ELM327 interface available", cmd)
                 return ""
             try:
                 msgs = iface.send_and_parse(cmd)
                 return "".join(str(m) for m in msgs) if msgs else ""
-            except Exception:
+            except Exception as exc:
+                log.warning("AT command %r failed: %s", cmd, exc)
                 return ""
 
         async with self._lock:
@@ -239,8 +267,8 @@ class ObdConnection:
         try:
             async with self._lock:
                 await asyncio.to_thread(self._conn.query, cmd, force=True)
-        except Exception:
-            log.debug("TesterPresent suppressed")
+        except Exception as exc:
+            log.warning("TesterPresent keepalive failed: %s", exc)
 
     @property
     def is_connected(self) -> bool:

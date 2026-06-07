@@ -216,6 +216,10 @@ class UdsDiscovery:
             return (data is not None, data)
         except asyncio.TimeoutError:
             return (False, None)
-        except Exception:
-            log.debug("UDS probe 0x%04X raised", identifier, exc_info=True)
+        except Exception as exc:
+            # Not a timeout — something unexpected: CAN framing error, serial
+            # fault, ELM327 in a bad state. Log at WARNING so it's visible in
+            # the log file without a full traceback (which would be repeated
+            # 1024+ times during a sweep and drown everything else).
+            log.warning("UDS probe 0x%04X unexpected error: %s", identifier, exc)
             return (False, None)

@@ -133,8 +133,8 @@ class KwpSession:
         if self._started and not self.is_mock:
             try:
                 await self._connection.query_kwp_service(0x20)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("KWP2000 StopDiagnosticSession failed: %s", exc)
             finally:
                 await self._connection.send_at("ATSP0")
         self._started = False

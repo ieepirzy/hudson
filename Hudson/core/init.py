@@ -5,7 +5,7 @@ The startup flow is a state machine:
     NEW
      ├── connect()                     → CONNECTED
      ├── read_protocol()               → PROTOCOL_KNOWN
-     ├── read_vin()                    → VIN_KNOWN  (or VIN_FAILED → generic fallback)
+     ├── resolve_vin_chain()           → VIN_KNOWN  (or VIN_FAILED → generic fallback)
      ├── select_manufacturer()         → MANUFACTURER_KNOWN
      ├── read_ecu_version()            → ECU_VERSION_KNOWN  (UDS strategy only)
      ├── run_priority1_discovery()     → UDS_DISCOVERY done (or skipped)
@@ -34,7 +34,7 @@ from Hudson.core.connection import ObdConnection
 from Hudson.core.ecu_cache import EcuCache
 from Hudson.core.kwp2000 import KwpSession
 from Hudson.core.uds import UdsDiscovery
-from Hudson.core.vin import VinReadError, read_vin
+from Hudson.core.vin import resolve_vin_chain
 from Hudson.manufacturers.registry import select_decoder
 
 if TYPE_CHECKING:
@@ -107,13 +107,17 @@ async def run_init(
 
     # ── 3. VIN ───────────────────────────────────────────────────────────────
     await events.put(InitEvent(InitStep.VIN, "reading VIN"))
-    try:
-        result.vin = await read_vin(connection)
+    result.vin = await resolve_vin_chain(connection)
+    if result.vin:
         await events.put(InitEvent(InitStep.VIN, result.vin, done=True))
-    except VinReadError as exc:
-        log.warning("VIN read failed: %s", exc)
+    else:
         await events.put(
-            InitEvent(InitStep.VIN, "unavailable", error=str(exc), done=True)
+            InitEvent(
+                InitStep.VIN,
+                "unavailable",
+                error="all VIN protocols failed — check hudson.log for details",
+                done=True,
+            )
         )
 
     # ── 4. Manufacturer ──────────────────────────────────────────────────────
@@ -209,7 +213,28 @@ async def _run_uds_steps(
         )
         kwp_blocks = getattr(result.manufacturer_module, "kwp_blocks", None)
         if kwp_blocks is not None:
-            await _run_kwp_session(connection, events, result)
+            # K-line session (ATSP3) is only safe when the vehicle is actually
+            # on a K-line protocol. Issuing ATSP3 on a CAN vehicle corrupts the
+            # ELM327 state machine and poisons subsequent mode 01 queries.
+            _proto_lower = connection.protocol_name.lower()
+            _is_can = not any(kw in _proto_lower for kw in ("9141", "14230", "kwp"))
+            if _is_can:
+                log.warning(
+                    "KWP blocks are defined for %s but protocol is CAN (%s) — "
+                    "K-line session blocked to protect adapter state",
+                    result.manufacturer_name,
+                    connection.protocol_name,
+                )
+                await events.put(
+                    InitEvent(
+                        InitStep.KWP_SESSION,
+                        "blocked — CAN protocol detected, K-line not safe",
+                        error="K-line session suppressed on CAN vehicle",
+                        done=True,
+                    )
+                )
+            else:
+                await _run_kwp_session(connection, events, result)
         else:
             await events.put(InitEvent(InitStep.KWP_SESSION, "not applicable", done=True))
         return

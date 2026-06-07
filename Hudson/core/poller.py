@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -54,10 +55,13 @@ class Poller:
         connection: ObdConnection,
         specs: list[PollSpec],
         out_queue: asyncio.Queue[Reading],
+        *,
+        on_reading: Callable[[Reading], None] | None = None,
     ) -> None:
         self._conn = connection
         self._specs = specs
         self._out = out_queue
+        self._on_reading = on_reading
         self._tasks: list[asyncio.Task[None]] = []
         self._stopped = asyncio.Event()
 
@@ -94,9 +98,13 @@ class Poller:
                 next_deadline = monotonic() + period
                 continue
 
-            await self._out.put(
-                Reading(command=spec.command, response=response, received_at=monotonic())
-            )
+            reading = Reading(command=spec.command, response=response, received_at=monotonic())
+            await self._out.put(reading)
+            if self._on_reading is not None:
+                try:
+                    self._on_reading(reading)
+                except Exception:
+                    log.warning("on_reading callback raised for %s", spec.command.name, exc_info=True)
 
             next_deadline += period
             sleep_for = next_deadline - monotonic()

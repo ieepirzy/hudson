@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from time import monotonic
+from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -33,6 +34,9 @@ from Hudson.tui.panes.vehicle import VehiclePane
 from Hudson.tui.widgets.gauge import GAUGE_CATALOG
 
 import obd
+
+if TYPE_CHECKING:
+    from Hudson.core.telemetry import TelemetryClient
 
 log = logging.getLogger(__name__)
 
@@ -164,10 +168,12 @@ class MainScreen(Screen[None]):
         self,
         connection: ObdConnection,
         init_result: InitResult,
+        telemetry: TelemetryClient | None = None,
     ) -> None:
         super().__init__()
         self._connection = connection
         self._init = init_result
+        self._telemetry = telemetry
         self._queue: asyncio.Queue[Reading] = asyncio.Queue()
         self._poller: Poller | None = None
         self._tab_ids = [t[0] for t in TABS]
@@ -191,7 +197,7 @@ class MainScreen(Screen[None]):
 
         with ContentSwitcher(initial="dashboard", id="content"):
             yield DashboardPane(self._connection, self._queue, self._init, id="dashboard")
-            yield DtcPane(self._connection, self._init, id="dtcs")
+            yield DtcPane(self._connection, self._init, telemetry=self._telemetry, id="dtcs")
             yield LogPane(id="log")
             yield VehiclePane(self._init, id="vehicle")
 
@@ -206,7 +212,8 @@ class MainScreen(Screen[None]):
         ]
 
         if active_specs:
-            self._poller = Poller(self._connection, active_specs, self._queue)
+            on_reading = self._telemetry.record_reading if self._telemetry is not None else None
+            self._poller = Poller(self._connection, active_specs, self._queue, on_reading=on_reading)
             await self._poller.start()
 
         if self._init.uds_discovery is not None:
@@ -235,17 +242,25 @@ class MainScreen(Screen[None]):
             self._uds_responding += 1
         if current % _PROGRESS_UPDATE_INTERVAL == 0 or current == total:
             elapsed = monotonic() - self._uds_start
-            self.query_one(UdsScanStrip).show_scanning(
-                current, total, self._uds_responding, elapsed
-            )
+            try:
+                self.query_one(UdsScanStrip).show_scanning(
+                    current, total, self._uds_responding, elapsed
+                )
+            except Exception:
+                # Widget removed if screen was dismounted mid-sweep; not an error.
+                pass
 
     def _on_uds_done(self, task: asyncio.Task[None]) -> None:
-        if task.cancelled() or task.exception() is not None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("UDS priority-2 background scan failed", exc_info=exc)
             return
         try:
             self.query_one(UdsScanStrip).show_complete(self._uds_responding)
         except Exception:
-            pass
+            log.debug("UDS scan strip update skipped (widget not available)")
 
     def action_next_tab(self) -> None:
         self._active_idx = (self._active_idx + 1) % len(self._tab_ids)

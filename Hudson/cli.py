@@ -1,7 +1,7 @@
 """Command-line entry point.
 
 Usage:
-    hudson [--port /dev/rfcomm0] [--protocol 6] [--no-voltage-check] [--mock] [--debug]
+    hudson [--port /dev/rfcomm0] [--protocol 6] [--no-voltage-check] [--mock] [--debug] [--telemetry]
 
 Connection is opened inside the SplashScreen so init progress is visible
 to the user, not hidden behind a CLI loading delay.
@@ -12,10 +12,40 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from Hudson.core.connection import ConnectionConfig, ObdConnection
 from Hudson.tui.app import HudsonApp
+
+
+_LOG_FMT = "%(asctime)s %(name)s %(levelname)s: %(message)s"
+
+
+def _configure_logging(debug: bool) -> None:
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    file_handler = RotatingFileHandler(
+        log_dir / "hudson.log",
+        maxBytes=1_000_000,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(_LOG_FMT))
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(file_handler)
+
+    if debug:
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setLevel(logging.DEBUG)
+        stderr_handler.setFormatter(logging.Formatter(_LOG_FMT))
+        root.addHandler(stderr_handler)
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -51,6 +81,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Verbose logging to stderr.",
     )
+    parser.add_argument(
+        "--telemetry",
+        action="store_true",
+        help="Send telemetry to api.muutto365.fi. Requires HUDSON_TELEMETRY_TOKEN env var.",
+    )
     return parser.parse_args(argv)
 
 
@@ -67,21 +102,28 @@ async def _amain(args: argparse.Namespace) -> int:
         )
         connection = ObdConnection(config)
 
+    telemetry = None
+    if args.telemetry:
+        token = os.environ.get("HUDSON_TELEMETRY_TOKEN")
+        if not token:
+            print("Error: --telemetry requires HUDSON_TELEMETRY_TOKEN environment variable", file=sys.stderr)
+            return 1
+        from Hudson.core.telemetry import TelemetryClient
+        telemetry = TelemetryClient(token)
+
     try:
-        app = HudsonApp(connection)  # type: ignore[arg-type]
+        app = HudsonApp(connection, telemetry=telemetry)  # type: ignore[arg-type]
         await app.run_async()
     finally:
+        if telemetry is not None:
+            await telemetry.stop()
         await connection.close()
     return 0
 
 
 def main() -> None:
     args = _parse_args(sys.argv[1:])
-    logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-        stream=sys.stderr,
-    )
+    _configure_logging(args.debug)
     raise SystemExit(asyncio.run(_amain(args)))
 
 
