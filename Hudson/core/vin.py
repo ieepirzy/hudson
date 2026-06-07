@@ -70,7 +70,7 @@ async def read_vin(connection: ObdConnection) -> str:
     the application level — we'd just fall back to the generic decoder — but
     the caller decides that policy.
     """
-    response = await connection.query(obd.commands.VIN, force=True)
+    response = await connection.query(obd.commands.VIN)
     if response.is_null():
         raise VinReadError("VIN response was null (no reply or unsupported)")
 

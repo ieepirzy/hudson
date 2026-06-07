@@ -202,7 +202,7 @@ class MainScreen(Screen[None]):
         active_specs = [
             PollSpec(getattr(obd.commands, pid), cfg.interval)
             for pid, cfg in GAUGE_CATALOG.items()
-            if pid in supported_names and hasattr(obd.commands, pid)
+            if hasattr(obd.commands, pid) and (not supported_names or pid in supported_names)
         ]
 
         if active_specs:

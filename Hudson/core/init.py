@@ -136,6 +136,15 @@ async def run_init(
     # ── 5 & 6. UDS discovery ─────────────────────────────────────────────────
     strategy = getattr(result.manufacturer_module, "DISCOVERY_STRATEGY", "probe")
 
+    # UDS (service 0x22) only makes sense over CAN. Sending it over a K-line
+    # protocol (ISO 9141-2, KWP2000) confuses the ELM327 state machine and
+    # corrupts subsequent mode 01 queries — skip entirely for K-line.
+    _proto = result.protocol_name.lower()
+    _is_kline = any(kw in _proto for kw in ("9141", "14230", "kwp"))
+    if _is_kline:
+        strategy = "mode01_only"
+        log.info("K-line protocol detected (%s) — skipping UDS discovery", result.protocol_name)
+
     # "probe"  → ask the ECU at runtime (handles uncertain transition-era vehicles)
     # "uds"    → manufacturer is certain; skip the probe gate, go straight to discovery
     # anything else → mode01_only, skip UDS entirely

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator
 
 import obd
-from obd import OBDCommand
+from obd import OBDCommand, OBDStatus
 from obd.protocols import ECU
 
 if TYPE_CHECKING:
@@ -69,8 +69,10 @@ class ObdConnection:
             )
 
         self._conn = await asyncio.to_thread(_open)
-        if not self._conn.is_connected():
-            status = self._conn.status()
+        status = self._conn.status()
+        # Accept OBD_CONNECTED (protocol found) as well as CAR_CONNECTED (mode 01 works).
+        # Hudson uses UDS/manufacturer protocols — mode 01 responsiveness is not required.
+        if status in (OBDStatus.NOT_CONNECTED, OBDStatus.ELM_CONNECTED):
             raise ConnectionError(f"failed to connect to ELM327: {status}")
 
         log.info("connected: protocol=%s port=%s", self._conn.protocol_name(), self._conn.port_name())
@@ -242,7 +244,9 @@ class ObdConnection:
 
     @property
     def is_connected(self) -> bool:
-        return self._conn is not None and self._conn.is_connected()
+        if self._conn is None:
+            return False
+        return self._conn.status() not in (OBDStatus.NOT_CONNECTED, OBDStatus.ELM_CONNECTED)
 
     @property
     def protocol_name(self) -> str:

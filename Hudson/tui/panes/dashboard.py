@@ -119,11 +119,12 @@ class DashboardPane(Widget):
         self._session: SessionStats | None = None
 
         supported_names = {c.name for c in init_result.supported_commands}
-        # Preserve catalog order; only include PIDs the car actually supports.
+        # If supported_commands is empty (car didn't respond to mode 01 bitmask
+        # queries), show every catalog gauge and let null responses display as --.
         self._active: list[tuple[str, object]] = [
             (pid, cfg)
             for pid, cfg in GAUGE_CATALOG.items()
-            if pid in supported_names
+            if not supported_names or pid in supported_names
         ]
 
     def compose(self) -> ComposeResult:
