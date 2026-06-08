@@ -2,6 +2,7 @@
 
 Usage:
     hudson [--port /dev/rfcomm0] [--protocol 6] [--no-voltage-check] [--mock] [--debug] [--telemetry]
+    hudson --vcan vcan0   (direct SocketCAN — no ELM327 required)
 
 Connection is opened inside the SplashScreen so init progress is visible
 to the user, not hidden behind a CLI loading delay.
@@ -86,6 +87,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Send telemetry to api.muutto365.fi. Requires HUDSON_TELEMETRY_TOKEN env var.",
     )
+    parser.add_argument(
+        "--vcan",
+        default=None,
+        metavar="IFACE",
+        help="Use a SocketCAN interface directly (e.g. vcan0). No ELM327 required.",
+    )
     return parser.parse_args(argv)
 
 
@@ -93,6 +100,9 @@ async def _amain(args: argparse.Namespace) -> int:
     if args.mock:
         from tests.fixtures.fake_connection import FakeConnection
         connection = FakeConnection()
+    elif args.vcan:
+        from Hudson.core.socketcan_connection import SocketCanConnection
+        connection = SocketCanConnection(args.vcan)  # type: ignore[assignment]
     else:
         config = ConnectionConfig(
             portstr=args.port,

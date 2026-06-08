@@ -1,0 +1,110 @@
+# Ford Transit 2.2 TDCi (Duratorq TDCI-100 / 115PS) — 2010 model year
+# WMI WF0 = Ford of Europe (Transit range, UK assembly)
+#
+# Tested address map:
+#   ECM physical : 0x7E0 (request) / 0x7E8 (response)
+#   Broadcast    : 0x7DF (request) / 0x7E8 (response)
+#   Gateway      : 0x7D9 (request) / 0x7DA (response)  — UDS VIN fallback
+#
+# All byte arrays are decimal.  Hex integers (0x...) are parsed by PyYAML.
+
+description: "Ford Transit 2.2 TDCi 2010 — healthy idle"
+vin: "WF0XXXTTFX9D21136"
+
+ecm_rx: 0x7E0
+ecm_tx: 0x7E8
+gw_rx:  0x7D9
+gw_tx:  0x7DA
+
+# ── Mode 01 supported-PID bitmasks ───────────────────────────────────────────
+# Key = meta-PID sent by tester (0 / 32 / 64).
+# Value = 32-bit bitmask (big-endian).
+#   bit 31 = PID meta+1 … bit 0 = next range available.
+#
+# Supported: ENGINE_LOAD(04) COOLANT(05) MAP(0B) RPM(0C) SPEED(0D)
+#            INTAKE_TEMP(0F) MAF(10) FUEL_RAIL_PRESSURE_VAC(22)
+#            COMMANDED_EGR(2C) EGR_ERROR(2D) CONTROL_MODULE_VOLTAGE(42)
+supported_pids:
+  0:  0x183B0001   # PIDs 0x01–0x20  (bit-0 set → 0x21–0x40 range available)
+  32: 0x40180001   # PIDs 0x21–0x40  bit30=0x22 bit20=0x2C bit19=0x2D bit0=next
+  64: 0x40000000   # PIDs 0x41–0x60
+
+# ── Mode 01 responses ────────────────────────────────────────────────────────
+# Key = PID (int).  Value = bytes AFTER "41 <pid>" in the response.
+mode01:
+  # ENGINE_LOAD  = A × 100 / 255      → 38 / 255 × 100 ≈ 14.9 %
+  4:  [38]
+  # COOLANT_TEMP = A − 40             → 120 − 40 = 80 °C (warming up)
+  5:  [120]
+  # MAP/INTAKE_PRESSURE = A kPa       → 100 kPa (near atm at diesel idle)
+  11: [100]
+  # RPM          = (A×256+B) / 4      → (12×256+128) / 4 = 800 rpm
+  12: [12, 128]
+  # SPEED        = A km/h             → 0 (stationary)
+  13: [0]
+  # INTAKE_TEMP  = A − 40             → 70 − 40 = 30 °C
+  15: [70]
+  # MAF          = (A×256+B) / 100    → (3×256+32) / 100 = 8.0 g/s
+  16: [3, 32]
+  # FUEL_RAIL_PRESSURE_VAC = (A×256+B) × 10 kPa  (PID 0x22 = decimal 34)
+  #                          (13×256+172) × 10 = 35000 kPa = 350 bar
+  34: [13, 172]
+  # COMMANDED_EGR = A × 100 / 255    → 76 / 255 × 100 ≈ 29.8 % commanded
+  44: [76]
+  # EGR_ERROR    = (A−128) × 100/128 → (128−128) × 100/128 = 0 %
+  45: [128]
+  # CONTROL_MODULE_VOLTAGE = (A×256+B) / 1000 V
+  #                          (55×256+224) / 1000 = 14.3 V
+  66: [55, 224]
+
+# ── DTC lists ─────────────────────────────────────────────────────────────────
+# P0401 = EGR Insufficient Flow Detected — endemic on 2.2 TDCi due to EGR soot build-up.
+dtcs_stored:    ["P0401"]
+dtcs_pending:   ["P0402"]   # EGR Excessive Flow — transient, not yet stored
+dtcs_permanent: []
+
+# ── Mode 22 (UDS 0x22) responses — ECM ───────────────────────────────────────
+# Key = identifier (int).  Value = payload bytes AFTER "62 HH LL".
+mode22:
+  # 0x09E2  DPF differential pressure — 50 × 0.1 Pa = 5 Pa (clean filter)
+  2530: [0, 50]
+  # 0xFD8A  Distance since last DPF regeneration — 50 km (recent)
+  64906: [0, 0, 0, 50]
+  # 0x168E  Fuel rail temperature — raw: 80, formula A−40 = 40 °C
+  5774: [80]
+  # 0x113C  EGR duty cycle — raw: 128, ~50 % (0xFF = 100 %)
+  4412: [128]
+  # 0xF189  ECU software version (ASCII "0001")
+  61833: [48, 48, 48, 49]
+
+# ── Mode 22 (UDS 0x22) responses — Gateway (0x7D9) ───────────────────────────
+# VIN via UDS F190 — used by Hudson VIN-chain step 2 as fallback.
+gw_mode22:
+  # 0xF190  VIN (17 ASCII bytes)
+  61840: "WF0XXXTTFX9D21136"
+
+# ── Degraded profile ──────────────────────────────────────────────────────────
+# When fake_ecu.py is started with --degraded these values override the above.
+#
+# Scenario: EGR valve stuck closed (duty 0 %), turbo wastegate fault causing
+# underboost (P0299 pending → stored), fuel rail pressure low but not yet at
+# limp-home threshold.  ECM has not yet set permanent codes.
+degraded:
+  mode01:
+    # MAP drops to 90 kPa — engine barely sees boost at idle (nominal 100+)
+    11: [90]
+    # FUEL_RAIL_PRESSURE_VAC: 180 bar = 18000 kPa → A=7, B=8  (PID 0x22 = decimal 34)
+    34: [7, 8]
+    # EGR_ERROR stuck at −100 %: (0 − 128) × 100 / 128 = −100 %
+    45: [0]
+
+  dtcs_stored:  ["P0401", "P0299"]   # P0299 = Turbo/Supercharger Underboost
+  dtcs_pending: ["P0299"]
+
+  mode22:
+    # EGR duty cycle 0 % — valve physically stuck
+    4412: [0]
+    # DPF differential pressure rising: 70 × 0.1 Pa = 7 Pa
+    2530: [0, 70]
+    # Fuel rail temp unchanged — 40 °C
+    5774: [80]
