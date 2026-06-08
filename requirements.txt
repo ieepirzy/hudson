@@ -10,7 +10,7 @@ flexcache==0.3
 flexparser==0.4
 frozenlist==1.8.0
 -e git+ssh://git@github.com/ieepirzy/hudson.git@c467a6daf3bfe5af2c56a1b25cd74bb116f00c08#egg=hudson
-idna==3.13
+idna==3.15
 iniconfig==2.3.0
 Jinja2==3.1.6
 librt==0.10.0
