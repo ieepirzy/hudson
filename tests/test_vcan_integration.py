@@ -27,7 +27,9 @@ from pathlib import Path
 
 import pytest
 
-from Hudson.core.socketcan_connection import SocketCanConnection
+import time
+
+from Hudson.core.socketcan_connection import SocketCanConnection, _to_wire
 from Hudson.core.dtc import decode_dtc_list
 
 # ── constants ─────────────────────────────────────────────────────────────────
@@ -404,3 +406,109 @@ async def test_degraded_dpf_pressure_rising(fake_ecu_degraded, conn):
         assert pressure > 60, f"DPF pressure not elevated in degraded scenario: {pressure}"
     finally:
         await conn.close()
+
+
+# ── Address management ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_at_atsh_sets_tx_rx(conn):
+    """ATSH7D9 sets tx=0x7D9 and rx=0x7DA (tx+1 for non-ECM addresses)."""
+    await _open(conn)
+    try:
+        await conn.send_at("ATSH7D9")
+        assert conn._tx_id == 0x7D9
+        assert conn._rx_id == 0x7DA
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_send_at_atd_resets_to_ecm_defaults(conn):
+    """ATD after ATSH resets tx/rx back to the ECM default addresses."""
+    await _open(conn)
+    try:
+        await conn.send_at("ATSH7D9")
+        assert conn._tx_id == 0x7D9
+        await conn.send_at("ATD")
+        assert conn._tx_id == SocketCanConnection._DEFAULT_ECM_TX
+        assert conn._rx_id == SocketCanConnection._DEFAULT_ECM_RX
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_send_at_atz_resets_to_ecm_defaults(conn):
+    """ATZ (full reset) also reverts to ECM default addresses."""
+    await _open(conn)
+    try:
+        await conn.send_at("ATSH7DF")
+        await conn.send_at("ATZ")
+        assert conn._tx_id == SocketCanConnection._DEFAULT_ECM_TX
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_send_at_ecm_range_uses_plus8(conn):
+    """ATSH in the ECM range (0x7E0–0x7E7) uses rx = tx + 8."""
+    await _open(conn)
+    try:
+        await conn.send_at("ATSH7E1")
+        assert conn._tx_id == 0x7E1
+        assert conn._rx_id == 0x7E1 + 8
+    finally:
+        await conn.close()
+
+
+# ── Timeout / no ECU ─────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_query_uds_timeout_no_listener(conn):
+    """query_uds to an address with no listener returns None within the timeout."""
+    await _open(conn)
+    try:
+        # Send to a CAN address nobody is listening on
+        await conn.send_at("ATSH6FF")
+        t0 = time.monotonic()
+        raw = await conn.query_uds(0x22, 0xF190, timeout=0.4)
+        elapsed = time.monotonic() - t0
+        assert raw is None
+        assert elapsed < 1.0, f"Timed out too slowly: {elapsed:.2f}s"
+    finally:
+        await conn.close()
+
+
+# ── supported_commands coverage ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_supported_commands_includes_voltage(fake_ecu, conn):
+    """CONTROL_MODULE_VOLTAGE (PID 0x42, third bitmask range) appears in supported commands."""
+    await _open(conn)
+    try:
+        cmds = await conn.supported_commands()
+        names = {c.name for c in cmds}
+        assert "CONTROL_MODULE_VOLTAGE" in names, f"CONTROL_MODULE_VOLTAGE not in {names}"
+    finally:
+        await conn.close()
+
+
+# ── _to_wire conversion ───────────────────────────────────────────────────────
+
+def test_to_wire_ascii_hex_command():
+    """Standard python-obd ASCII hex commands convert correctly to wire bytes."""
+    import obd
+    wire = _to_wire(obd.commands.RPM.command)
+    assert wire == bytes([0x01, 0x0C])
+
+
+def test_to_wire_binary_command():
+    """Binary byte commands (custom OBDCommands) pass through unchanged."""
+    wire = _to_wire(bytes([0x07]))
+    assert wire == bytes([0x07])
+
+
+def test_to_wire_mode09_vin():
+    """Mode 09 VIN command (b'0902') converts to [0x09, 0x02]."""
+    import obd
+    wire = _to_wire(obd.commands.VIN.command)
+    assert wire == bytes([0x09, 0x02])

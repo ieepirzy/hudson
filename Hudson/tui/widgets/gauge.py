@@ -167,11 +167,15 @@ class Gauge(Widget):
             bar_str = f"[{color}]{_bar(value, self._max)}[/]"
             spark_str = f"[{color}]{_spark(self._history, self._max)}[/]"
 
-        self.query_one("#header", Static).update(
-            f"[bold {color} dim]{self._label.upper()}[/]  {reading}"
-        )
-        self.query_one("#spark", Static).update(spark_str)
-        self.query_one("#bar", Static).update(bar_str)
+        try:
+            self.query_one("#header", Static).update(
+                f"[bold {color} dim]{self._label.upper()}[/]  {reading}"
+            )
+            self.query_one("#spark", Static).update(spark_str)
+            self.query_one("#bar", Static).update(bar_str)
+        except Exception:  # noqa: BLE001
+            # Widget not yet composed (race between poller and mount); next reading will update.
+            pass
 
     def disable(self) -> None:
         self._disabled = True

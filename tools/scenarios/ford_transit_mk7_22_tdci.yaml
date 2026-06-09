@@ -1,0 +1,141 @@
+# Ford Transit MK7 2.2L Duratorq TDCi (Siemens/Continental PCM) — 2010 model year
+# WMI WF0 = Ford Motor Company, Europe (Southampton plant)
+#
+# Protocol:
+#   Ford PCM uses UDS Mode 22 (ReadDataByIdentifier) for extended PIDs.
+#   ELM327 header: ATSH C4 10 F1.
+#   CAN IDs: 0x7E0 (request) / 0x7E8 (response) — standard J2534.
+#
+# Engine note:
+#   2010 MK7 pre-2012 uses suction-controlled high-pressure pump.
+#   Pump-learning PIDs (PMPLRN_ST) differ from post-2012 pressure-controlled units.
+#   DPF PID set matches 2010 profile (FD8A/FD89/FD87 present; some post-2012 only).
+#
+# All byte arrays are decimal. Hex integers (0x...) are parsed by PyYAML.
+
+description: "Ford Transit MK7 2.2L Duratorq TDCi — healthy idle"
+vin: "WF0TXXGBWATY12345"
+
+ecm_rx: 0x7E0
+ecm_tx: 0x7E8
+gw_rx:  0x7D9
+gw_tx:  0x7DA
+
+# ── Mode 01 supported-PID bitmasks ────────────────────────────────────────────
+# Diesel engine: no spark advance (0x0E), no O2 sensors in Mode 01, but has
+# EGR command/error (0x2C/0x2D) and throttle position (0x11).
+supported_pids:
+  0:  0x383B8001   # 0x03(fuel sys) 0x04(load) 0x05(ect) 0x0B(map) 0x0C(rpm)
+                   # 0x0D(spd) 0x0F(iat) 0x10(maf) 0x11(throttle) + 0x20 present
+  32: 0x00180001   # 0x2C(EGR cmd) 0x2D(EGR err) + 0x40 present
+  64: 0x40000000   # 0x42(voltage)
+
+# ── Mode 01 responses ─────────────────────────────────────────────────────────
+mode01:
+  # FUEL_SYSTEM_STATUS: closed loop, no fault — byte1=0x02
+  3:  [2, 0]
+  # ENGINE_LOAD = A × 100 / 255 → 63 / 255 × 100 ≈ 24.7 %
+  4:  [63]
+  # COOLANT_TEMP = A − 40 → 125 − 40 = 85 °C (warm idle)
+  5:  [125]
+  # MAP = A kPa → 101 kPa (near atmospheric, no boost at idle)
+  11: [101]
+  # RPM = (A×256+B) / 4 → (12×256+208) / 4 = 820 rpm
+  12: [12, 208]
+  # SPEED = A km/h → 0 (stationary)
+  13: [0]
+  # INTAKE_TEMP = A − 40 → 68 − 40 = 28 °C
+  15: [68]
+  # MAF = (A×256+B) / 100 → (2×256+238) / 100 = 7.5 g/s
+  16: [2, 238]
+  # THROTTLE_POSITION = A × 100 / 255 → 26 / 255 × 100 ≈ 10.2 % (idle crack)
+  17: [26]
+  # COMMANDED_EGR = A × 100 / 255 → 63 / 255 × 100 ≈ 24.7 %
+  44: [63]
+  # EGR_ERROR = (A−128) × 100 / 128 → 0 %
+  45: [128]
+  # CONTROL_MODULE_VOLTAGE = (A×256+B) / 1000 V → 14.32 V
+  66: [55, 224]
+
+# ── DTCs ──────────────────────────────────────────────────────────────────────
+dtcs_stored:    []
+dtcs_pending:   []
+dtcs_permanent: []
+
+# ── Mode 22 (UDS 0x22) responses — ECM ────────────────────────────────────────
+mode22:
+  # ── Generic Ford PIDs ───────────────────────────────────────────────────────
+  # 0x1165 RPM: (A×256+B)/4 → 820 rpm
+  4453: [12, 208]
+  # 0x1139 ECT: A−40 → 85 °C
+  4409: [125]
+  # 0x1123 IAT: A−40 → 28 °C
+  4387: [68]
+  # 0x115A LOAD: A×100/255 → 24.7 %
+  4442: [63]
+  # 0x1101 bitmask: bit3=PNP (park/neutral) → 0x08
+  4353: [8]
+  # 0x110E FPA: bit0=1 (fuel pump running)
+  4366: [1]
+
+  # ── Duratorq diesel PIDs ───────────────────────────────────────────────────
+  # 0x09E2 DPF differential pressure: 3 kPa (low — healthy filter at idle)
+  2530: [3]
+  # 0xFD8A DPF last completed regen: (1×256+94)/10 = 35.0 km
+  64906: [1, 94]
+  # 0xFD89 DPF avg distance between regens: (3×256+182)/10 = 95.4 km
+  64905: [3, 182]
+  # 0xFD87 DPF failed regen count: 0
+  64903: [0]
+  # 0x0579 DPF soot load: 20 %
+  1401: [20]
+  # 0x113C EGR duty cycle: A×100/255 → 24.7 %
+  4412: [63]
+  # 0x0370 Manifold pressure (hi-res): (1×256+152)×0.25 = 102.0 kPa
+  880:  [1, 152]
+  # 0x168E Fuel rail temperature: 55 °C (direct)
+  5774: [55]
+  # 0x03F4 EGT1 (post-turbo, pre-cat): 64×5 = 320 °C
+  1012: [64]
+  # 0x03F5 EGT2 (pre-DPF): 59×5 = 295 °C
+  1013: [59]
+  # 0xF434 Lambda: 59016×3.05×10⁻⁵ ≈ 1.80  (lean diesel at idle)
+  62516: [230, 136]
+
+  # ── Identification ─────────────────────────────────────────────────────────
+  # 0xF189 ECU software version (ASCII "FD00")
+  61833: [70, 68, 48, 48]
+
+# ── Mode 22 (UDS 0x22) responses — Gateway (0x7D9) ───────────────────────────
+gw_mode22:
+  # 0xF190  VIN (17 ASCII bytes)
+  61840: "WF0TXXGBWATY12345"
+
+# ── Degraded profile ──────────────────────────────────────────────────────────
+# Scenario: DPF severely clogged — high back-pressure, failed regenerations.
+# EGR also impeded by soot back-flow.  MIL on with P2002 + P2463.
+degraded:
+  mode01:
+    # MAP drops — exhaust back-pressure limiting airflow
+    11: [94]
+    # EGR error: stuck/choked → saturated negative
+    45: [0]
+
+  dtcs_stored:  ["P2002", "P2463", "P2459"]
+  dtcs_pending: ["P2002", "P2463"]
+
+  mode22:
+    # DPF differential pressure elevated to 14 kPa (clogged)
+    2530: [14]
+    # DPF soot load: 78 % (regen severely overdue)
+    1401: [78]
+    # DPF last regen: 210 km ago
+    64906: [8, 52]
+    # DPF failed regen count: 4
+    64903: [4]
+    # EGT1 elevated — hot from failed regens: 92×5 = 460 °C
+    1012: [92]
+    # EGT2 elevated: 86×5 = 430 °C
+    1013: [86]
+    # Lambda drops toward stoichiometric: 1.3 → 42623×3.05×10⁻⁵ ≈ 1.30
+    62516: [166, 95]

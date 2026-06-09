@@ -104,6 +104,32 @@ _REGISTRY: list[WmiEntry] = [
     WmiEntry("VNK", "Hudson.manufacturers.toyota"),  # Toyota France
     WmiEntry("SB1", "Hudson.manufacturers.toyota"),  # Toyota UK
 
+    # ── Ford Motor Company ───────────────────────────────────────────────────
+    # Europe (Transit, Focus, Fiesta — Southampton / Saarlouis / Valencia)
+    WmiEntry("WF0", "Hudson.manufacturers.ford"),   # Ford Europe (Transit MK6/MK7+)
+    WmiEntry("WF9", "Hudson.manufacturers.ford"),   # Ford Germany
+    # UK
+    WmiEntry("SAF", "Hudson.manufacturers.ford"),   # Ford UK (some models)
+    # USA
+    WmiEntry("1FA", "Hudson.manufacturers.ford"),   # Ford USA passenger cars
+    WmiEntry("1FB", "Hudson.manufacturers.ford"),   # Ford USA trucks/vans
+    WmiEntry("1FC", "Hudson.manufacturers.ford"),   # Ford USA trucks
+    WmiEntry("1FD", "Hudson.manufacturers.ford"),   # Ford USA incomplete vehicles
+    WmiEntry("1FT", "Hudson.manufacturers.ford"),   # Ford USA F-series / Transit
+    WmiEntry("1FM", "Hudson.manufacturers.ford"),   # Ford USA SUVs (Explorer / Expedition)
+    WmiEntry("1FP", "Hudson.manufacturers.ford"),   # Ford USA (Lincoln)
+    # Canada
+    WmiEntry("2FA", "Hudson.manufacturers.ford"),   # Ford Canada passenger
+    WmiEntry("2FB", "Hudson.manufacturers.ford"),   # Ford Canada trucks
+    WmiEntry("2FM", "Hudson.manufacturers.ford"),   # Ford Canada SUV
+    WmiEntry("2FT", "Hudson.manufacturers.ford"),   # Ford Canada trucks
+    # Mexico
+    WmiEntry("3FA", "Hudson.manufacturers.ford"),   # Ford Mexico passenger
+    WmiEntry("3FB", "Hudson.manufacturers.ford"),   # Ford Mexico trucks
+    # South Africa / Australia
+    WmiEntry("AAF", "Hudson.manufacturers.ford"),   # Ford South Africa
+    WmiEntry("6FP", "Hudson.manufacturers.ford"),   # Ford Australia
+
     # ── Volvo ─────────────────────────────────────────────────────────────────
     WmiEntry("YV1", "Hudson.manufacturers.volvo"),  # Volvo passenger cars
     WmiEntry("YV2", "Hudson.manufacturers.volvo"),  # Volvo buses / heavy trucks
