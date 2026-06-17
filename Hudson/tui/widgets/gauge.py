@@ -93,8 +93,7 @@ class Gauge(Widget):
     Gauge {
         border: round $primary 40%;
         padding: 0;
-        height: 1fr;
-        min-height: 5;
+        height: 7;
         layout: vertical;
     }
     Gauge.gauge--disabled {

@@ -7,7 +7,7 @@ import logging
 from time import monotonic
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
 
@@ -93,12 +93,10 @@ class DashboardPane(Widget):
         height: 1fr;
     }
     #dash-left {
-        layout: vertical;
         width: 2fr;
         padding: 1;
     }
     #dash-right {
-        layout: vertical;
         width: 1fr;
         padding: 1;
     }
@@ -132,13 +130,13 @@ class DashboardPane(Widget):
         left_pids = self._active[:mid]
         right_pids = self._active[mid:]
 
-        with Vertical(id="dash-left"):
+        with VerticalScroll(id="dash-left"):
             for pid, cfg in left_pids:
                 g = Gauge(pid, cfg, widget_id=f"g-{pid.lower()}")
                 self._gauges[pid] = g
                 yield g
 
-        with Vertical(id="dash-right"):
+        with VerticalScroll(id="dash-right"):
             for pid, cfg in right_pids:
                 g = Gauge(pid, cfg, widget_id=f"g-{pid.lower()}")
                 self._gauges[pid] = g

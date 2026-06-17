@@ -254,7 +254,7 @@ class ObdConnection:
                 # send_and_parse routes through the OBD protocol parser — wrong for AT
                 # commands which return plain text ("OK", version strings, voltages).
                 # Use the private __send to get raw response lines instead.
-                lines = iface._ELM327__send(cmd.encode())
+                lines = iface._ELM327__send(cmd)
                 return "\n".join(lines) if lines else ""
             except Exception as exc:
                 log.warning("AT command %r failed: %s", cmd, exc)
