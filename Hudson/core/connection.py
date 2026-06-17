@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator
@@ -47,6 +48,9 @@ class ConnectionConfig:
     check_voltage: bool = True
 
 
+_VOLTAGE_RE = re.compile(r"^\d+\.?\d*\s*[Vv]?$")
+
+
 class ObdConnection:
     """Async-friendly wrapper around `obd.OBD`."""
 
@@ -54,6 +58,7 @@ class ObdConnection:
         self._config = config or ConnectionConfig()
         self._conn: obd.OBD | None = None
         self._lock = asyncio.Lock()
+        self._reconnect_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         """Open the underlying serial connection in a worker thread."""
@@ -85,22 +90,21 @@ class ObdConnection:
         produce a timestamped snapshot in the log file so we can diagnose
         adapter misconfiguration without re-plugging.
         """
+        ati = await self.send_at("ATI")
         dp = await self.send_at("ATDP")
         rv = await self.send_at("ATRV")
         log.info(
-            "ELM327 state after init — protocol: %r  voltage: %r",
+            "ELM327 state after init — firmware: %r  protocol: %r  voltage: %r",
+            ati.strip(),
             dp.strip(),
             rv.strip(),
         )
-        if self._config.protocol and not dp.strip().startswith("AUTO"):
-            # If a specific protocol was requested, log if the adapter is in
-            # auto-detect mode (may indicate the requested protocol was ignored).
-            pass  # informational only; python-obd negotiated successfully
-        if rv.strip() in ("", "?", "NODATA"):
+        voltage = rv.strip()
+        if not voltage or not _VOLTAGE_RE.match(voltage):
             log.warning(
                 "ELM327: voltage read returned %r — "
                 "adapter may not be seeing ignition power",
-                rv.strip(),
+                voltage,
             )
 
     async def close(self) -> None:
@@ -109,12 +113,53 @@ class ObdConnection:
         await asyncio.to_thread(self._conn.close)
         self._conn = None
 
+    async def _reconnect(self) -> None:
+        """Reconnect with exponential backoff. Returns only when connected.
+
+        Uses a separate lock so concurrent callers all wait for the same
+        reconnect attempt rather than racing to open multiple connections.
+        The UDS discovery cache (keyed by ECU version string) remains valid
+        across reconnects as long as the same vehicle is connected.
+        """
+        async with self._reconnect_lock:
+            if self.is_connected:
+                return
+            delay = 1.0
+            attempt = 0
+            while True:
+                attempt += 1
+                log.warning("reconnecting (attempt %d)…", attempt)
+                try:
+                    if self._conn is not None:
+                        await asyncio.to_thread(self._conn.close)
+                        self._conn = None
+                except Exception:
+                    pass
+                try:
+                    await self.connect()
+                    log.info("reconnected after %d attempt(s)", attempt)
+                    return
+                except Exception as exc:
+                    log.warning("reconnect attempt %d failed: %s — retrying in %.0fs", attempt, exc, delay)
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 60.0)
+
     async def query(self, cmd: OBDCommand, force: bool = False) -> OBDResponse:
-        """Send a single OBD command, awaiting the response."""
+        """Send a single OBD command, awaiting the response.
+
+        If the adapter disconnects mid-session, transparently reconnects with
+        exponential backoff before returning. Callers block until the adapter
+        is back online.
+        """
         if self._conn is None:
             raise RuntimeError("not connected")
         async with self._lock:
-            return await asyncio.to_thread(self._conn.query, cmd, force=force)
+            resp = await asyncio.to_thread(self._conn.query, cmd, force=force)
+        if not self.is_connected:
+            await self._reconnect()
+            async with self._lock:
+                resp = await asyncio.to_thread(self._conn.query, cmd, force=force)
+        return resp
 
     async def supported_commands(self) -> set[OBDCommand]:
         """Return the set of commands the connected vehicle reports as supported."""

@@ -99,6 +99,7 @@ class Reassembler:
             raise IsoTpError("consecutive frame without first frame")
         seq = frame[0] & 0x0F
         if seq != self._next_seq:
+            self.reset()
             raise IsoTpError(
                 f"out-of-order CF: expected seq {self._next_seq}, got {seq}"
             )

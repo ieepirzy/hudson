@@ -135,7 +135,11 @@ async def run_init(
         await events.put(
             InitEvent(InitStep.MANUFACTURER, "generic fallback", error=str(exc), done=True)
         )
-        result.manufacturer_module = importlib.import_module("Hudson.manufacturers.generic")
+        try:
+            result.manufacturer_module = importlib.import_module("Hudson.manufacturers.generic")
+        except Exception:  # noqa: BLE001
+            log.exception("generic manufacturer module also failed to load")
+            result.manufacturer_module = None
         result.manufacturer_name = "Generic"
 
     # ── 5 & 6. UDS discovery ─────────────────────────────────────────────────

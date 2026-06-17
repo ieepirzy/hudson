@@ -94,7 +94,7 @@ class Poller:
             except Exception:
                 log.exception("query failed for %s", spec.command.name)
                 # Backoff so a sick PID doesn't spam logs.
-                await asyncio.sleep(period * 5)
+                await asyncio.sleep(min(period * 5, 30.0))
                 next_deadline = monotonic() + period
                 continue
 

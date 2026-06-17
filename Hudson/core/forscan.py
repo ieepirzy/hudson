@@ -37,6 +37,14 @@ def _load() -> dict[str, str]:
                     if code and desc:
                         raw.setdefault(code, []).append(desc)
         _db = {k: " / ".join(dict.fromkeys(v)) for k, v in raw.items()}
+        corrupted = sum(1 for v in _db.values() if "\ufffd" in v)
+        if corrupted:
+            log.warning(
+                "ForScan DTC database: %d entr%s contain replacement characters (U+FFFD) "
+                "— file may not be UTF-8 encoded",
+                corrupted,
+                "ies" if corrupted != 1 else "y",
+            )
         log.debug("Loaded %d ForScan DTC entries from %s", len(_db), _DB_PATH)
     except Exception:
         log.warning("Failed to load ForScan DTC database from %s", _DB_PATH)

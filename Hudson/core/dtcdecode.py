@@ -13,6 +13,7 @@ httpx follows automatically.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 
 import httpx
 from bs4 import BeautifulSoup
@@ -113,7 +114,8 @@ AUTO_MAKE_MAP: dict[str, str] = {
     "Volkswagen": "Volkswagen",
 }
 
-_cache: dict[tuple[str, str], str | None] = {}
+_MAX_CACHE = 1024
+_cache: OrderedDict[tuple[str, str], str | None] = OrderedDict()
 _client: httpx.AsyncClient | None = None
 
 
@@ -123,7 +125,7 @@ def _get_client() -> httpx.AsyncClient:
         _client = httpx.AsyncClient(
             headers={"User-Agent": "Hudson OBD2 scanner/0.1"},
             follow_redirects=True,
-            timeout=10.0,
+            timeout=3.0,
         )
     return _client
 
@@ -161,10 +163,14 @@ async def fetch_definition(make: str, code: str) -> str | None:
     try:
         resp = await _get_client().get(url)
         if resp.status_code == 404:
+            if len(_cache) >= _MAX_CACHE:
+                _cache.popitem(last=False)
             _cache[key] = None
             return None
         resp.raise_for_status()
         result = _parse_definition(resp.text)
+        if len(_cache) >= _MAX_CACHE:
+            _cache.popitem(last=False)
         _cache[key] = result
         return result
     except Exception:

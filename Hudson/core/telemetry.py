@@ -107,7 +107,7 @@ class TelemetryClient:
                 {"pid": reading.command.name, "value": float(value), "ts": time.time()}
             )
         except asyncio.QueueFull:
-            pass
+            log.warning("telemetry reading queue full — dropping reading for %s", reading.command.name)
 
     async def record_dtcs(
         self,
