@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,7 @@ from textual.widgets import Button, DataTable, Label, Static
 from ...core.connection import ObdConnection
 from ...core.dtc import decode_dtc_list
 from ...core.dtc_lookup import lookup_description as dtc_lookup_description
+from ...core.dtcdecode import fetch_definition as dtcdecode_fetch
 from ...core.init import InitResult
 
 if TYPE_CHECKING:
@@ -177,7 +179,12 @@ class DtcPane(Widget):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Status", "Code", "System", "Type", "Description")
+        table.add_column("Status", key="status")
+        table.add_column("Code", key="code")
+        table.add_column("System", key="system")
+        table.add_column("Type", key="type")
+        table.add_column("Description", key="description")
+        table.add_column("2nd Opinion", key="second_opinion")
 
     async def on_show(self) -> None:
         if not self._auto_scanned:
@@ -210,6 +217,7 @@ class DtcPane(Widget):
         code: str,
         obd_desc: str | None,
         status: str,
+        row_key: str,
     ) -> None:
         system = {
             "P": "Powertrain",
@@ -230,7 +238,7 @@ class DtcPane(Widget):
         db_desc = dtc_lookup_description(code, self._init.manufacturer_name)
         description = mfr_desc or db_desc or obd_desc or "—"
 
-        table.add_row(status, code, system, dtype, description)
+        table.add_row(status, code, system, dtype, description, "…", key=row_key)
 
     async def _do_scan(self) -> None:
         table = self.query_one(DataTable)
@@ -240,6 +248,8 @@ class DtcPane(Widget):
         stored_codes: list[str] = []
         pending_codes: list[str] = []
         permanent_codes: list[str] = []
+        # (row_key, code) pairs for dtcdecode update pass
+        row_entries: list[tuple[str, str]] = []
 
         # Mode 03 — stored DTCs (python-obd returns list of (code_str, desc_str))
         try:
@@ -250,7 +260,9 @@ class DtcPane(Widget):
                 status_parts.append("Stored: none")
             else:
                 for code, obd_desc in resp.value:
-                    self._add_dtc_row(table, code, obd_desc, "Stored")
+                    key = f"S:{code}"
+                    self._add_dtc_row(table, code, obd_desc, "Stored", key)
+                    row_entries.append((key, code))
                     stored_codes.append(code)
                     total += 1
                 status_parts.append(f"Stored: {len(resp.value)}")
@@ -269,7 +281,9 @@ class DtcPane(Widget):
                     status_parts.append("Pending: none")
                 else:
                     for dtc in dtcs:
-                        self._add_dtc_row(table, dtc.code, None, "Pending")
+                        key = f"P:{dtc.code}"
+                        self._add_dtc_row(table, dtc.code, None, "Pending", key)
+                        row_entries.append((key, dtc.code))
                         pending_codes.append(dtc.code)
                         total += 1
                     status_parts.append(f"Pending: {len(dtcs)}")
@@ -288,7 +302,9 @@ class DtcPane(Widget):
                     status_parts.append("Permanent: none")
                 else:
                     for dtc in dtcs:
-                        self._add_dtc_row(table, dtc.code, None, "Permanent")
+                        key = f"M:{dtc.code}"
+                        self._add_dtc_row(table, dtc.code, None, "Permanent", key)
+                        row_entries.append((key, dtc.code))
                         permanent_codes.append(dtc.code)
                         total += 1
                     status_parts.append(f"Permanent: {len(dtcs)}")
@@ -306,3 +322,31 @@ class DtcPane(Widget):
             self.query_one("#dtc-status", Static).update(
                 f" {total} code(s) found.  {summary}  |  r=refresh  c=clear stored"
             )
+
+        # Fetch dtcdecode.com 2nd opinions concurrently for all found codes.
+        make = self._init.dtcdecode_make
+        if make and row_entries:
+            await self._fetch_second_opinions(table, make, row_entries)
+
+    async def _fetch_second_opinions(
+        self,
+        table: DataTable,  # type: ignore[type-arg]
+        make: str,
+        row_entries: list[tuple[str, str]],
+    ) -> None:
+        unique_codes = list({code for _, code in row_entries})
+        results = await asyncio.gather(
+            *(dtcdecode_fetch(make, code) for code in unique_codes),
+            return_exceptions=True,
+        )
+        definitions: dict[str, str] = {}
+        for code, result in zip(unique_codes, results):
+            if isinstance(result, str):
+                definitions[code] = result
+
+        for row_key, code in row_entries:
+            defn = definitions.get(code, "—")
+            try:
+                table.update_cell(row_key, "second_opinion", defn or "—")
+            except Exception:
+                log.debug("Could not update 2nd opinion cell for %s", code)

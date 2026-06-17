@@ -79,6 +79,7 @@ class InitResult:
     uds_identifiers: list[int] = field(default_factory=list)
     uds_discovery: UdsDiscovery | None = None
     kwp_session: KwpSession | None = None
+    dtcdecode_make: str | None = None  # set by splash screen after make selection
 
 
 async def run_init(

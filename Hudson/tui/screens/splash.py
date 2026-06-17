@@ -14,6 +14,9 @@ Visually (UDS path):
   │   ·  Ready                                                           │
   │                                                                       │
   └───────────────────────────────────────────────────────────────────────┘
+
+After init, if the vehicle make could not be auto-detected, a make-selection
+modal is shown so that dtcdecode.com lookups can work.
 """
 
 from __future__ import annotations
@@ -22,11 +25,13 @@ import asyncio
 import logging
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.screen import Screen
-from textual.widgets import Label, Static
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, Label, Select, Static
 
 from Hudson.core.connection import ObdConnection
+from Hudson.core.dtcdecode import AUTO_MAKE_MAP, MAKES
 from Hudson.core.init import InitEvent, InitResult, InitStep, run_init
 
 log = logging.getLogger(__name__)
@@ -49,6 +54,79 @@ _STEP_LABELS: dict[InitStep, str] = {
 def _progress_bar(progress: float) -> str:
     filled = round(progress * _BAR_WIDTH)
     return f"[{'█' * filled}{'░' * (_BAR_WIDTH - filled)}]"
+
+
+class MakeSelectScreen(ModalScreen[str | None]):
+    """Prompt the user to pick a vehicle make for dtcdecode.com lookups.
+
+    Shown when VIN lookup failed or the WMI-derived manufacturer is ambiguous
+    (e.g. VW/Audi), so we cannot auto-map to a dtcdecode.com make slug.
+    Dismisses with the chosen make string, or None if the user skips.
+    """
+
+    BINDINGS = [Binding("escape", "skip", "Skip")]
+
+    DEFAULT_CSS = """
+    MakeSelectScreen {
+        align: center middle;
+    }
+    #make-dialog {
+        width: 60;
+        height: auto;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #make-title {
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    #make-subtitle {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    #make-select {
+        margin-bottom: 1;
+    }
+    #make-buttons {
+        height: 3;
+        align: right middle;
+    }
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self._reason = reason
+        self._selected: str | None = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="make-dialog"):
+            yield Static("Select Vehicle Make", id="make-title")
+            yield Static(self._reason, id="make-subtitle")
+            yield Select(
+                [(make, make) for make in MAKES],
+                prompt="Select make for dtcdecode.com lookups…",
+                id="make-select",
+            )
+            with Horizontal(id="make-buttons"):
+                yield Button("Skip", variant="default", id="btn-skip")
+                yield Button("Confirm", variant="primary", id="btn-confirm")
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        self._selected = event.value if event.value != Select.BLANK else None
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-confirm":
+            self.dismiss(self._selected)
+        else:
+            self.dismiss(None)
+
+    def action_skip(self) -> None:
+        self.dismiss(None)
 
 
 class SplashScreen(Screen[InitResult]):
@@ -111,6 +189,15 @@ class SplashScreen(Screen[InitResult]):
 
         await asyncio.sleep(0.2)
         consumer.cancel()
+
+        # Resolve dtcdecode make: try auto-map first, prompt on ambiguity/failure.
+        result.dtcdecode_make = _auto_detect_make(result)
+        if result.dtcdecode_make is None:
+            reason = _make_prompt_reason(result)
+            result.dtcdecode_make = await self.app.push_screen_wait(
+                MakeSelectScreen(reason)
+            )
+
         self.dismiss(result)
 
     async def _consume_events(self) -> None:
@@ -138,3 +225,20 @@ class SplashScreen(Screen[InitResult]):
             else:
                 detail = f"  —  {event.detail}" if event.detail else ""
                 label.update(f" ⏳  {base}{detail}")
+
+
+def _auto_detect_make(result: InitResult) -> str | None:
+    """Return a dtcdecode make slug if it can be unambiguously inferred."""
+    return AUTO_MAKE_MAP.get(result.manufacturer_name)
+
+
+def _make_prompt_reason(result: InitResult) -> str:
+    if result.vin is None:
+        return (
+            "VIN could not be read — select the vehicle make so that "
+            "dtcdecode.com lookups work correctly."
+        )
+    return (
+        f"Manufacturer detected as '{result.manufacturer_name}' which maps to "
+        "more than one make on dtcdecode.com — please select the correct one."
+    )
