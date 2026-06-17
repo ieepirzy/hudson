@@ -251,4 +251,5 @@ DTC_DESCRIPTIONS: dict[str, str] = {
 
 
 def lookup_dtc(code: str) -> str | None:
-    return DTC_DESCRIPTIONS.get(code)
+    from Hudson.core.forscan import lookup as forscan_lookup
+    return forscan_lookup(code) or DTC_DESCRIPTIONS.get(code)
