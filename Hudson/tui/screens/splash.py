@@ -71,7 +71,7 @@ class MakeSelectScreen(ModalScreen[str | None]):
         align: center middle;
     }
     #make-dialog {
-        width: 60;
+        width: 80%;
         height: auto;
         border: round $accent;
         background: $surface;
@@ -137,7 +137,7 @@ class SplashScreen(Screen[InitResult]):
         align: center middle;
     }
     SplashScreen > Vertical {
-        width: 72;
+        width: 90%;
         height: auto;
         border: round $primary;
         padding: 1 2;
@@ -170,7 +170,12 @@ class SplashScreen(Screen[InitResult]):
                 self._labels[step] = lbl
                 yield lbl
 
-    async def on_mount(self) -> None:
+    def on_mount(self) -> None:
+        # Run init in a Textual worker so on_mount returns immediately and the
+        # screen's message pump can process label updates and render frames.
+        self.run_worker(self._init_worker(), exclusive=True)
+
+    async def _init_worker(self) -> None:
         consumer = asyncio.create_task(self._consume_events())
         try:
             result = await run_init(self._connection, self._events)
@@ -183,9 +188,6 @@ class SplashScreen(Screen[InitResult]):
             consumer.cancel()
             self.app.exit(message=f"Init failed: {exc}")
             return
-
-        # Priority-2 background sweep is started by MainScreen after it mounts,
-        # so it holds the task reference and can cancel on exit.
 
         await asyncio.sleep(0.2)
         consumer.cancel()

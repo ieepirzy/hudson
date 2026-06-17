@@ -74,7 +74,7 @@ class ClearDtcConfirmScreen(ModalScreen[bool]):
     }
 
     #confirm-dialog {
-        width: 52;
+        width: 70%;
         height: auto;
         border: round $warning;
         background: $surface;

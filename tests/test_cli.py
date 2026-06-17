@@ -18,7 +18,7 @@ def test_defaults() -> None:
     assert args.port is None
     assert args.baudrate is None
     assert args.protocol is None
-    assert args.no_voltage_check is False
+    assert args.voltage_check is False
     assert args.mock is False
     assert args.debug is False
     assert args.telemetry is False
@@ -40,9 +40,9 @@ def test_protocol_flag() -> None:
     assert args.protocol == "6"
 
 
-def test_no_voltage_check_flag() -> None:
-    args = _parse_args(["--no-voltage-check"])
-    assert args.no_voltage_check is True
+def test_voltage_check_flag() -> None:
+    args = _parse_args(["--voltage-check"])
+    assert args.voltage_check is True
 
 
 def test_mock_flag() -> None:

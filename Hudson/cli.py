@@ -68,9 +68,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help='OBD2 protocol id ("6" = ISO 15765-4 CAN 11/500). Default: auto.',
     )
     parser.add_argument(
-        "--no-voltage-check",
+        "--voltage-check",
         action="store_true",
-        help="Skip ELM327 battery voltage check. Useful for BT adapters that report bad voltage.",
+        help="Enable ELM327 battery voltage check (disabled by default; some BT adapters report bad voltage).",
     )
     parser.add_argument(
         "--mock",
@@ -108,7 +108,7 @@ async def _amain(args: argparse.Namespace) -> int:
             portstr=args.port,
             baudrate=args.baudrate,
             protocol=args.protocol,
-            check_voltage=not args.no_voltage_check,
+            check_voltage=args.voltage_check,
         )
         connection = ObdConnection(config)
 

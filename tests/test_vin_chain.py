@@ -92,9 +92,17 @@ async def test_chain_records_at_commands() -> None:
 
 @pytest.mark.asyncio
 async def test_chain_restores_protocol_after_kwp_attempt() -> None:
-    """After K-line attempts, ATSP0 is issued to restore auto-detect."""
+    """After K-line attempts, ATSP0 is issued to restore auto-detect.
+
+    Only meaningful on K-line protocols — KWP steps are skipped on CAN to
+    prevent the ELM327 from hanging on K-line fast-init with no K-line signal.
+    """
 
     class FailMode09AndUds(FakeConnection):
+        @property
+        def protocol_name(self) -> str:
+            return "ISO 14230-4 KWP fast"  # K-line — KWP steps must run
+
         async def query(self, cmd, force=False):
             import obd as _obd
             if cmd is _obd.commands.VIN:
@@ -118,3 +126,25 @@ async def test_chain_restores_protocol_after_kwp_attempt() -> None:
         None,
     )
     assert last_atsp == "ATSP0"
+
+
+@pytest.mark.asyncio
+async def test_chain_skips_kwp_on_can() -> None:
+    """KWP steps are not attempted on CAN — prevents ELM327 K-line fast-init hang."""
+
+    class CanFailMode09AndUds(FakeConnection):
+        async def query(self, cmd, force=False):
+            import obd as _obd
+            if cmd is _obd.commands.VIN:
+                from obd import OBDResponse
+                return OBDResponse(command=cmd, messages=[])
+            return await super().query(cmd, force=force)
+
+        async def query_uds(self, service, identifier, timeout=0.15):
+            return None
+
+    conn = CanFailMode09AndUds()  # protocol_name = "ISO 15765-4 (CAN 11/500)"
+    await conn.connect()
+    await resolve_vin_chain(conn)
+
+    assert "ATSP3" not in conn._send_at_history
