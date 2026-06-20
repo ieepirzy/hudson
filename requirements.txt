@@ -19,7 +19,7 @@ markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mdit-py-plugins==0.6.0
 mdurl==0.1.2
-msgpack==1.1.2
+msgpack==1.2.1
 multidict==6.7.1
 mypy==2.0.0
 mypy_extensions==1.1.0
