@@ -65,6 +65,9 @@ class LogPane(Widget):
 
     def on_mount(self) -> None:
         rich_log = self.query_one(RichLog)
+        rich_log.border_title = "Log"
+        rich_log.border_subtitle = "live application output"
+        rich_log.write("[dim]  —  waiting for log output  —[/dim]")
         self._handler = _RichLogHandler(rich_log)
         logging.getLogger().addHandler(self._handler)
 

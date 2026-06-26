@@ -99,7 +99,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 async def _amain(args: argparse.Namespace) -> int:
     if args.mock:
         from tests.fixtures.fake_connection import FakeConnection
-        connection = FakeConnection()
+        connection = FakeConnection(
+            functional_responders=[0x7E0, 0x7E1],
+            present_ecus={0x7E0, 0x7E1},
+        )
     elif args.vcan:
         from Hudson.core.socketcan_connection import SocketCanConnection
         connection = SocketCanConnection(args.vcan)  # type: ignore[assignment]

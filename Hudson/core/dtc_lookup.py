@@ -4,9 +4,40 @@ Sources:
   - Generic SAE J2012 / ISO 15031-6: python-OBD project (GPL-2.0)
     https://github.com/brendan-w/python-OBD
   - VAG manufacturer-specific: Ross-Tech Wiki public entries
+  - Ford: FORScan DTC export (Hudson/data/ford.db, built by tools/build_ford_dtc_db.py)
 """
 
 from __future__ import annotations
+
+import functools
+import sqlite3
+from pathlib import Path
+
+_DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+@functools.lru_cache(maxsize=1024)
+def _ford_lookup(code: str) -> str | None:
+    """Return a Ford-specific description from Hudson/data/ford.db, or None.
+
+    Results are cached per code for the process lifetime — the DB is read-only
+    and DTC codes are a fixed vocabulary, so stale cache is not a concern.
+    Multiple descriptions for the same code are joined with ' / '.
+    """
+    db_path = _DATA_DIR / "ford.db"
+    if not db_path.exists():
+        return None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.execute(
+                "SELECT description FROM dtc_definitions WHERE code = ? ORDER BY rowid LIMIT 5",
+                (code,),
+            )
+            rows = [r[0] for r in cur.fetchall()]
+        return " / ".join(rows) if rows else None
+    except Exception:
+        return None
+
 
 GENERIC_DTC: dict[str, str] = {
     "P0001": "Fuel Volume Regulator Control Circuit/Open",
@@ -2152,13 +2183,17 @@ def lookup(code: str, manufacturer: str = "generic") -> tuple[str, str] | None:
     """Look up a DTC code.
 
     Returns (description, source) or None if not found.
-    source is one of: 'generic', 'vag'
+    source is one of: 'generic', 'vag', 'ford'
     """
     code = code.upper().strip()
     mfr = manufacturer.lower()
     if any(v in mfr for v in ("vag", "vw", "audi", "seat", "skoda", "volkswagen")):
         if code in VAG_DTC:
             return VAG_DTC[code], "vag"
+    if "ford" in mfr or "lincoln" in mfr or "mercury" in mfr:
+        desc = _ford_lookup(code)
+        if desc:
+            return desc, "ford"
     if code in GENERIC_DTC:
         return GENERIC_DTC[code], "generic"
     return None

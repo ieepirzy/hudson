@@ -59,29 +59,33 @@ class VehiclePane(Widget):
             id="vehicle-header",
         )
         disc = self._init.discovered_ecus
-        if disc and disc.found:
+        if disc is not None:
             yield DataTable(id="ecu-table", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="pid-table", cursor_type="row", zebra_stripes=True)
 
     def on_mount(self) -> None:
         disc = self._init.discovered_ecus
-        if disc and disc.found:
+        if disc is not None:
             ecu_table = self.query_one("#ecu-table", DataTable)
+            ecu_table.border_title = "Discovered ECUs"
             ecu_table.add_column("Addr", width=6)
             ecu_table.add_column("Tier", width=6)
             ecu_table.add_column("Label")
-            _tier_color = {
-                DiscoveryTier.A: "green",
-                DiscoveryTier.B: "cyan",
-                DiscoveryTier.C: "yellow",
-            }
-            for addr, ecu in sorted(disc.found.items()):
-                color = _tier_color.get(ecu.tier, "white")
-                ecu_table.add_row(
-                    f"0x{addr:03X}",
-                    f"[{color}]{ecu.tier.value}[/]",
-                    ecu.label or "—",
-                )
+            if disc.found:
+                _tier_color = {
+                    DiscoveryTier.A: "green",
+                    DiscoveryTier.B: "cyan",
+                    DiscoveryTier.C: "yellow",
+                }
+                for addr, ecu in sorted(disc.found.items()):
+                    color = _tier_color.get(ecu.tier, "white")
+                    ecu_table.add_row(
+                        f"0x{addr:03X}",
+                        f"[{color}]{ecu.tier.value}[/]",
+                        ecu.label or "—",
+                    )
+            else:
+                ecu_table.add_row("[dim]—[/dim]", "[dim]—[/dim]", "[dim]no ECUs discovered[/dim]")
 
         pid_table = self.query_one("#pid-table", DataTable)
         pid_table.add_column("Mode", width=6)
