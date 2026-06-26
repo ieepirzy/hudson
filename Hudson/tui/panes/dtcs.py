@@ -498,6 +498,8 @@ class DtcPane(Widget):
         if make and row_entries:
             await self._fetch_second_opinions(table, make, row_entries)
 
+        await self._refresh_clear_stats()
+
     async def _refresh_clear_stats(self) -> None:
         """Query ECU metrics about the last DTC clear and update the sidebar."""
 

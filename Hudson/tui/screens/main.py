@@ -133,7 +133,6 @@ class TabBar(Widget):
             if tid == tab_id:
                 widget.add_class("tab--active")
                 widget.remove_class("tab")
-                widget.remove_class("tab")
             else:
                 widget.remove_class("tab--active")
                 if "tab" not in widget.classes:
