@@ -17,10 +17,11 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Label, Static
 
 from ...core.connection import ObdConnection
-from ...core.dtc import decode_dtc_list
+from ...core.dtc import DtcRecord, decode_dtc_list
 from ...core.dtc_lookup import lookup_description as dtc_lookup_description
 from ...core.dtcdecode import fetch_definition as dtcdecode_fetch
 from ...core.init import InitResult
+from ...core.uds_dtc import scan_ecus_for_dtcs
 
 if TYPE_CHECKING:
     from ...core.telemetry import TelemetryClient
@@ -183,6 +184,7 @@ class DtcPane(Widget):
         table.add_column("Code", key="code")
         table.add_column("System", key="system")
         table.add_column("Type", key="type")
+        table.add_column("ECU", key="ecu")
         table.add_column("Description", key="description")
         table.add_column("2nd Opinion", key="second_opinion")
 
@@ -211,6 +213,15 @@ class DtcPane(Widget):
             log.exception("DTC clear failed")
             self.query_one("#dtc-status", Static).update(f" Clear failed: {exc}")
 
+    def _lookup_description(self, code: str, obd_desc: str | None = None) -> str:
+        mfr_desc: str | None = None
+        if self._init.manufacturer_module:
+            mfr_desc = getattr(
+                self._init.manufacturer_module, "lookup_dtc", lambda _: None
+            )(code)
+        db_desc = dtc_lookup_description(code, self._init.manufacturer_name)
+        return mfr_desc or db_desc or obd_desc or "—"
+
     def _add_dtc_row(
         self,
         table: DataTable,  # type: ignore[type-arg]
@@ -218,6 +229,7 @@ class DtcPane(Widget):
         obd_desc: str | None,
         status: str,
         row_key: str,
+        ecu: str = "Std",
     ) -> None:
         system = {
             "P": "Powertrain",
@@ -228,17 +240,29 @@ class DtcPane(Widget):
 
         is_mfr = code[0] == "P" and code[1] in ("1", "3")
         dtype = "Manufacturer" if is_mfr else "SAE"
+        description = self._lookup_description(code, obd_desc)
+        table.add_row(status, code, system, dtype, ecu, description, "…", key=row_key)
 
-        # Resolution order: manufacturer module → dtc_lookup DB → python-obd str
-        mfr_desc: str | None = None
-        if self._init.manufacturer_module:
-            mfr_desc = getattr(
-                self._init.manufacturer_module, "lookup_dtc", lambda _: None
-            )(code)
-        db_desc = dtc_lookup_description(code, self._init.manufacturer_name)
-        description = mfr_desc or db_desc or obd_desc or "—"
+    def _add_dtc_record_row(
+        self,
+        table: DataTable,  # type: ignore[type-arg]
+        record: DtcRecord,
+        row_key: str,
+        ecu: str,
+    ) -> None:
+        code = record.dtc.code
+        system = {
+            "P": "Powertrain",
+            "C": "Chassis",
+            "B": "Body",
+            "U": "Network",
+        }.get(code[0], "Unknown")
 
-        table.add_row(status, code, system, dtype, description, "…", key=row_key)
+        is_mfr = code[0] == "P" and code[1] in ("1", "3")
+        dtype = "Manufacturer" if is_mfr else "SAE"
+        description = self._lookup_description(code)
+        status = record.status.flags_str()
+        table.add_row(status, code, system, dtype, ecu, description, "…", key=row_key)
 
     async def _do_scan(self) -> None:
         table = self.query_one(DataTable)
@@ -311,6 +335,58 @@ class DtcPane(Widget):
         except Exception as exc:
             log.exception("Mode 0A scan failed")
             status_parts.append(f"Permanent: error — {exc}")
+
+        # UDS 0x19 — multi-ECU sweep (CAN only; UDS 0x19 requires ISO-TP framing)
+        if self._connection.is_can_protocol:
+            try:
+                self.query_one("#dtc-status", Static).update(" Scanning UDS 0x19 (multi-ECU)…")
+                # Use addresses from tiered discovery when available; the discovered
+                # set includes proprietary addresses (e.g. Ford BCM 0x733, ABS 0x726)
+                # that the standard J1979 sweep would miss.
+                _disc = self._init.discovered_ecus
+                _addrs = list(_disc.found.keys()) if _disc and _disc.found else None
+                uds_results = await scan_ecus_for_dtcs(
+                    self._connection, sub_fn=0x02, addresses=_addrs
+                )
+                uds_total = 0
+                for addr, records in uds_results.items():
+                    ecu_label = f"{addr:03X}"
+                    for record in records:
+                        key = f"UDS:{addr:03X}:{record.dtc.code}"
+                        try:
+                            self._add_dtc_record_row(table, record, key, ecu_label)
+                            row_entries.append((key, record.dtc.code))
+                            uds_total += 1
+                            total += 1
+                        except Exception:
+                            log.debug("Duplicate or invalid UDS row key %s — skipping", key)
+                if uds_total:
+                    status_parts.append(f"UDS: {uds_total}")
+                else:
+                    status_parts.append("UDS: none")
+            except Exception as exc:
+                log.exception("UDS 0x19 scan failed")
+                status_parts.append(f"UDS: error — {exc}")
+
+        # KWP 0x18 — if a K-line session is active from init
+        if self._init.kwp_session is not None:
+            try:
+                kwp_records = await self._init.kwp_session.read_dtcs()
+                if kwp_records:
+                    for record in kwp_records:
+                        key = f"KWP:{record.dtc.code}"
+                        try:
+                            self._add_dtc_record_row(table, record, key, "KWP")
+                            row_entries.append((key, record.dtc.code))
+                            total += 1
+                        except Exception:
+                            log.debug("Duplicate or invalid KWP row key %s — skipping", key)
+                    status_parts.append(f"KWP: {len(kwp_records)}")
+                else:
+                    status_parts.append("KWP: none")
+            except Exception as exc:
+                log.exception("KWP 0x18 scan failed")
+                status_parts.append(f"KWP: error — {exc}")
 
         if self._telemetry is not None:
             await self._telemetry.record_dtcs(stored_codes, pending_codes, permanent_codes)

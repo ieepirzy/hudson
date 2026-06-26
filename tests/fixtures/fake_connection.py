@@ -15,6 +15,13 @@ from typing import TYPE_CHECKING
 import obd
 from obd import OBDResponse
 
+from Hudson.core.connection import (
+    MODE22_TIMEOUT_S,
+    UdsResponse,
+    UdsResponseStatus,
+    _atst_for,
+)
+
 if TYPE_CHECKING:
     from obd import OBDCommand
 
@@ -41,13 +48,26 @@ class FakeConnection:
         ("P1176", ""),
     ]
 
-    def __init__(self, vin: str = "WV2ZZZ7HZ8H123456") -> None:
+    def __init__(
+        self,
+        vin: str = "WV2ZZZ7HZ8H123456",
+        *,
+        functional_responders: list[int] | None = None,
+        present_ecus: set[int] | None = None,
+    ) -> None:
         self._vin = vin
         self._connected = False
         self._t0 = monotonic()
         self._dtcs: list[tuple[str, str]] = list(self._INITIAL_DTCS)
         self._protocol_kline = False
         self._send_at_history: list[str] = []
+        # Tier A: addresses that respond to Mode 01 functional broadcast.
+        self._functional_responders: list[int] = list(functional_responders or [])
+        # Tier B/C: addresses that respond to TesterPresent probe.
+        # Defaults to {0x7E0} to match query_uds_dtc_at_addr's existing behaviour.
+        self._present_ecus: set[int] = (
+            set(present_ecus) if present_ecus is not None else {0x7E0}
+        )
         self._supported = {
             obd.commands.RPM,
             obd.commands.SPEED,
@@ -74,6 +94,10 @@ class FakeConnection:
     @property
     def protocol_name(self) -> str:
         return "ISO 15765-4 (CAN 11/500)"
+
+    @property
+    def is_can_protocol(self) -> bool:
+        return "CAN" in self.protocol_name
 
     async def supported_commands(self) -> set[OBDCommand]:
         return set(self._supported)
@@ -121,6 +145,39 @@ class FakeConnection:
             self._protocol_kline = False
         return "OK"
 
+    async def query_uds_at_addr(
+        self,
+        ecu_addr: int,
+        identifier: int,
+        timeout: float = MODE22_TIMEOUT_S,
+    ) -> UdsResponse:
+        """Return fake UDS 0x22 responses; tracks ATST commands in _send_at_history."""
+        _config_timeout = 0.1  # ConnectionConfig.timeout default
+        _atst_changed = abs(timeout - _config_timeout) > 1e-4
+        if _atst_changed:
+            await self.send_at(_atst_for(timeout))
+        try:
+            await asyncio.sleep(0.01)
+            data = _MOCK_UDS_RESPONSES.get(identifier)
+        finally:
+            if _atst_changed:
+                await self.send_at(_atst_for(_config_timeout))
+        if data is None:
+            return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+        return UdsResponse(UdsResponseStatus.OK, data=data)
+
+    async def query_uds_dtc_at_addr(
+        self,
+        ecu_addr: int,
+        sub_fn: int,
+        params: bytes = b"",
+    ) -> UdsResponse:
+        """Return fake UDS 0x19 payloads for ECU 0x7E0 (header already stripped)."""
+        await asyncio.sleep(0.01)
+        if ecu_addr == 0x7E0 and sub_fn in (0x02, 0x0A):
+            return UdsResponse(UdsResponseStatus.OK, data=_MOCK_UDS19_PAYLOAD)
+        return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+
     async def query_kwp_service(
         self,
         service: int,
@@ -130,10 +187,29 @@ class FakeConnection:
         await asyncio.sleep(0.01)
         return None
 
+    async def query_functional_mode01(self, pid: int = 0x00) -> list[int]:
+        """Return addresses configured as functional-broadcast responders."""
+        await asyncio.sleep(0.01)
+        return list(self._functional_responders)
+
+    async def probe_ecu_tester_present(self, addr: int) -> bool:
+        """Return True if *addr* is in the set of present ECUs."""
+        await asyncio.sleep(0.01)
+        return addr in self._present_ecus
+
     @property
     def protocol_kline(self) -> bool:
         return self._protocol_kline
 
+
+# UDS 0x19 payload for ECU 0x7E0 (0x59 + sub_fn header already stripped).
+# Records: [hi, mid, lo, status_byte] per DTC.
+#   P0300 = (0x03, 0x00) — confirmed + pending + MIL  (0x8C)
+#   P0171 = (0x01, 0x71) — testFailed + confirmed     (0x09)
+_MOCK_UDS19_PAYLOAD: bytes = bytes([
+    0x03, 0x00, 0x00, 0x8C,
+    0x01, 0x71, 0x00, 0x09,
+])
 
 # Fake UDS positive-response payloads (data bytes only, UDS header stripped).
 _MOCK_UDS_RESPONSES: dict[int, bytes] = {
@@ -176,7 +252,15 @@ _MOCK_VOLVO_KWP_DATA: dict[int, bytes] = {
 }
 
 
-class FakeVolvoConnection(FakeConnection):
+class FakeKlineConnection(FakeConnection):
+    """FakeConnection that reports a K-line protocol — use for transport auto-detect tests."""
+
+    @property
+    def protocol_name(self) -> str:
+        return "ISO 14230-4 (KWP fast init)"
+
+
+class FakeVolvoConnection(FakeKlineConnection):
     """FakeConnection variant with a Volvo VIN, no UDS, and a working K-line session.
 
     UDS probe (0xF189) returns None so the init sequence falls through to
@@ -190,6 +274,12 @@ class FakeVolvoConnection(FakeConnection):
     async def query_uds(self, service: int, identifier: int, timeout: float = 0.15) -> bytes | None:
         await asyncio.sleep(0.01)
         return None  # no UDS — triggers KWP fallback
+
+    async def query_uds_at_addr(
+        self, ecu_addr: int, identifier: int, timeout: float = MODE22_TIMEOUT_S
+    ) -> UdsResponse:
+        await asyncio.sleep(0.01)
+        return UdsResponse(UdsResponseStatus.NO_RESPONSE)  # K-line only — no CAN UDS
 
     async def query_kwp_service(
         self,
@@ -213,7 +303,7 @@ class FakeToyotaConnection(FakeConnection):
     """FakeConnection variant with a Toyota VIN and Toyota-specific mock responses.
 
     Use this fixture for tests that exercise the Toyota enhanced PID flow
-    (mode 0x22 via query_uds and mode 0x21 via query_enhanced_local).
+    (mode 0x22 via query_uds_at_addr and mode 0x21 via query_enhanced_local).
     """
 
     def __init__(self) -> None:
@@ -222,6 +312,15 @@ class FakeToyotaConnection(FakeConnection):
     async def query_uds(self, service: int, identifier: int, timeout: float = 0.15) -> bytes | None:
         await asyncio.sleep(0.01)
         return _MOCK_TOYOTA_UDS_RESPONSES.get(identifier)
+
+    async def query_uds_at_addr(
+        self, ecu_addr: int, identifier: int, timeout: float = MODE22_TIMEOUT_S
+    ) -> UdsResponse:
+        await asyncio.sleep(0.01)
+        data = _MOCK_TOYOTA_UDS_RESPONSES.get(identifier)
+        if data is None:
+            return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+        return UdsResponse(UdsResponseStatus.OK, data=data)
 
     async def query_enhanced_local(self, local_id: int, timeout: float = 0.15) -> bytes | None:
         await asyncio.sleep(0.01)

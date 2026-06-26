@@ -227,6 +227,8 @@ class FakeEcu:
             return self._mode0A()
         if svc == 0x04:
             return bytes([0x44])   # clear DTCs ack
+        if svc == 0x19:
+            return self._uds19(payload)
         if svc == 0x22:
             return self._uds22(payload, ecm=True)
         if svc == 0x3E:
@@ -279,6 +281,25 @@ class FakeEcu:
     def _mode0A(self) -> bytes:
         codes = self._s.get("dtcs_permanent", [])
         return _dtc_payload(0x4A, codes)
+
+    def _uds19(self, payload: bytes) -> bytes:
+        """UDS service 0x19 ReadDTCInformation.
+
+        Sub-function 0x02 (reportDTCByStatusMask) and 0x0A (reportSupportedDTC)
+        return stored DTCs. Each record is [hi, lo, 0x00, 0x8C] (status = confirmed
+        + pending + MIL).  All other sub-functions return NRC 0x12.
+        """
+        if len(payload) < 2:
+            return bytes([0x7F, 0x19, 0x13])   # NRC: incorrectMessageLength
+        sub_fn = payload[1]
+        if sub_fn not in (0x02, 0x0A):
+            return bytes([0x7F, 0x19, 0x12])   # NRC: subFunctionNotSupported
+        codes = self._s.get("dtcs_stored", [])
+        records = b"".join(
+            bytes([hi, lo, 0x00, 0x8C])
+            for hi, lo in (_encode_dtc(c) for c in codes)
+        )
+        return bytes([0x59, sub_fn, 0xFF]) + records  # 0xFF = all status bits available
 
     def _uds22(self, payload: bytes, *, ecm: bool) -> bytes:
         if len(payload) < 3:

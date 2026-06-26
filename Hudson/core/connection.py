@@ -17,6 +17,7 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, AsyncIterator
 
 import obd
@@ -49,6 +50,60 @@ class ConnectionConfig:
 
 
 _VOLTAGE_RE = re.compile(r"^\d+\.?\d*\s*[Vv]?$")
+
+# ── UDS response types ────────────────────────────────────────────────────────
+
+_ATST_UNIT: float = 0.004  # ELM327 ATST step: 4 ms per unit
+MODE22_TIMEOUT_S: float = 0.25  # generous timeout for Mode 22 on clone hardware
+
+
+def _atst_for(seconds: float) -> str:
+    """Format an ELM327 ATST command for the given timeout in seconds."""
+    val = max(1, min(0xFF, int(seconds / _ATST_UNIT + 0.5)))
+    return f"ATST {val:02X}"
+
+
+_NRC_NAMES: dict[int, str] = {
+    0x10: "generalReject",
+    0x11: "serviceNotSupported",
+    0x12: "subFunctionNotSupported",
+    0x13: "incorrectMessageLengthOrInvalidFormat",
+    0x14: "responseTooLong",
+    0x21: "busyRepeatRequest",
+    0x22: "conditionsNotCorrect",
+    0x24: "requestSequenceError",
+    0x25: "noResponseFromSubnetComponent",
+    0x26: "failurePreventsExecutionOfRequestedAction",
+    0x31: "requestOutOfRange",
+    0x33: "securityAccessDenied",
+    0x35: "invalidKey",
+    0x36: "exceededNumberOfAttempts",
+    0x37: "requiredTimeDelayNotExpired",
+    0x70: "uploadDownloadNotAccepted",
+    0x71: "transferDataSuspended",
+    0x72: "generalProgrammingFailure",
+    0x73: "wrongBlockSequenceCounter",
+    0x78: "requestCorrectlyReceivedResponsePending",
+    0x7E: "subFunctionNotSupportedInActiveSession",
+    0x7F: "serviceNotSupportedInActiveSession",
+}
+
+
+class UdsResponseStatus(Enum):
+    OK = "ok"
+    NO_RESPONSE = "no_response"
+    NEGATIVE_RESPONSE = "negative_response"
+    TRUNCATED = "truncated"
+    LIKELY_TRUNCATED_MULTIFRAME = "likely_truncated_multiframe"
+
+
+@dataclass(frozen=True, slots=True)
+class UdsResponse:
+    """Typed result of a UDS query — callers check .status before using .data."""
+
+    status: UdsResponseStatus
+    data: bytes = b""
+    nrc: int = 0
 
 
 class ObdConnection:
@@ -206,6 +261,157 @@ class ObdConnection:
             return bytes(raw[3:])
         return None
 
+    async def query_uds_at_addr(
+        self,
+        ecu_addr: int,
+        identifier: int,
+        timeout: float = MODE22_TIMEOUT_S,
+    ) -> UdsResponse:
+        """Send UDS 0x22 ReadDataByIdentifier to a specific ECU address.
+
+        ATSH and the query are performed atomically under one lock acquisition to
+        prevent TOCTOU races between concurrent callers. When *timeout* differs
+        from the connection's configured timeout, ATST is updated via send_at()
+        before the query and restored in a finally block — matching the pattern
+        used by scan_ecus_for_dtcs for ATAT.
+
+        Returns a UdsResponse; callers should check .status before using .data.
+        """
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        high = (identifier >> 8) & 0xFF
+        low = identifier & 0xFF
+        cmd = OBDCommand(
+            f"UDS22_{ecu_addr:03X}_{identifier:04X}",
+            f"UDS ReadDataByIdentifier 0x{identifier:04X} @ ECU 0x{ecu_addr:03X}",
+            bytes([0x22, high, low]),
+            0,
+            _uds_passthrough,
+            ECU.ALL,
+            False,
+        )
+
+        conn = self._conn
+
+        def _atomic() -> bytes | None:
+            iface = getattr(conn, "interface", getattr(conn, "_interface", None))
+            if iface is None:
+                return None
+            try:
+                iface.send_and_parse(f"ATSH {ecu_addr:03X}")
+            except Exception as exc:
+                log.warning("ATSH %03X failed: %s", ecu_addr, exc)
+                return None
+            resp = conn.query(cmd, force=True)
+            if resp.is_null() or resp.value is None:
+                return None
+            return bytes(resp.value)
+
+        config_timeout = self._config.timeout
+        atst_changed = abs(timeout - config_timeout) > 1e-4
+        if atst_changed:
+            await self.send_at(_atst_for(timeout))
+        try:
+            async with self._lock:
+                raw = await asyncio.to_thread(_atomic)
+        finally:
+            if atst_changed:
+                await self.send_at(_atst_for(config_timeout))
+
+        if raw is None or len(raw) < 3:
+            return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+        if raw[0] == 0x7F and len(raw) >= 3:
+            nrc = raw[2]
+            nrc_name = _NRC_NAMES.get(nrc, f"0x{nrc:02X}")
+            log.info(
+                "UDS 0x22 NR 0x%04X @ 0x%03X: NRC 0x%02X (%s)",
+                identifier, ecu_addr, nrc, nrc_name,
+            )
+            return UdsResponse(UdsResponseStatus.NEGATIVE_RESPONSE, nrc=nrc)
+        if raw[0] == 0x62 and raw[1] == high and raw[2] == low:
+            return UdsResponse(UdsResponseStatus.OK, data=bytes(raw[3:]))
+        return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+
+    async def query_uds_dtc_at_addr(
+        self,
+        ecu_addr: int,
+        sub_fn: int,
+        params: bytes = b"",
+    ) -> UdsResponse:
+        """Send a UDS 0x19 (ReadDTCInformation) request to a specific ECU address.
+
+        ATSH and the query are performed atomically under one lock acquisition to
+        prevent TOCTOU races between concurrent callers.
+
+        Returns a UdsResponse. LIKELY_TRUNCATED_MULTIFRAME is returned when the
+        record payload is not a multiple of 4 bytes — this indicates ISO-TP
+        multi-frame truncation caused by ELM327 clone FC (flow control) failure;
+        the .data field still contains whatever bytes were received so the caller
+        can decode the complete 4-byte records that arrived.
+        """
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        request = bytes([0x19, sub_fn]) + params
+        cmd = OBDCommand(
+            f"UDS19_{ecu_addr:03X}_{sub_fn:02X}",
+            f"UDS ReadDTCInformation 0x{sub_fn:02X} @ ECU 0x{ecu_addr:03X}",
+            request,
+            0,
+            _uds_passthrough,
+            ECU.ALL,
+            False,
+        )
+
+        conn = self._conn
+
+        def _atomic() -> bytes | None:
+            iface = getattr(conn, "interface", getattr(conn, "_interface", None))
+            if iface is None:
+                return None
+            try:
+                iface.send_and_parse(f"ATSH {ecu_addr:03X}")
+            except Exception as exc:
+                log.warning("ATSH %03X failed: %s", ecu_addr, exc)
+                return None
+            resp = conn.query(cmd, force=True)
+            if resp.is_null() or resp.value is None:
+                return None
+            return bytes(resp.value)
+
+        async with self._lock:
+            raw = await asyncio.to_thread(_atomic)
+
+        if raw is None:
+            return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+        if raw[0] == 0x7F and len(raw) >= 3:
+            nrc = raw[2]
+            nrc_name = _NRC_NAMES.get(nrc, f"0x{nrc:02X}")
+            log.info(
+                "UDS 0x19 NR sub_fn=0x%02X @ 0x%03X: NRC 0x%02X (%s)",
+                sub_fn, ecu_addr, nrc, nrc_name,
+            )
+            return UdsResponse(UdsResponseStatus.NEGATIVE_RESPONSE, nrc=nrc)
+        # Response layout: [0x59, sub_fn, DTCStatusAvailabilityMask, record…]
+        # ISO 14229-1: mask byte always present for sub_fn 0x02 and 0x0A.
+        if len(raw) < 3 or raw[0] != 0x59 or raw[1] != sub_fn:
+            return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+        records_payload = bytes(raw[3:])
+        if records_payload and len(records_payload) % 4 != 0:
+            # Non-multiple-of-4 record payload: ISO-TP multi-frame response likely
+            # truncated. ELM327 v1.5 clones commonly fail to send the Flow Control
+            # (FC 0x30 CTS) frame, causing the ECU to stop after the first CAN frame
+            # (~7 usable bytes). Cannot fix in software over the AT-command interface.
+            log.warning(
+                "UDS 0x19 @ 0x%03X: payload length %d is not a multiple of 4 — "
+                "ISO-TP multi-frame likely truncated (ELM327 clone FC failure); "
+                "%d complete record(s) decodable",
+                ecu_addr, len(records_payload), len(records_payload) // 4,
+            )
+            return UdsResponse(UdsResponseStatus.LIKELY_TRUNCATED_MULTIFRAME, data=records_payload)
+        return UdsResponse(UdsResponseStatus.OK, data=records_payload)
+
     async def query_enhanced_local(self, local_id: int, timeout: float = 0.15) -> bytes | None:
         """Send a mode 0x21 ReadDataByLocalIdentifier request.
 
@@ -296,6 +502,113 @@ class ObdConnection:
             return bytes(raw[1:])
         return None
 
+    async def query_functional_mode01(self, pid: int = 0x00) -> list[int]:
+        """Broadcast Mode 01 PID to the J1979 functional address (0x7DF).
+
+        Sets ATSH to 7DF, sends Mode 01 PID *pid*, and returns the physical
+        CAN IDs of every ECU that responded.
+
+        Source address extraction: python-obd initialises the ELM327 with
+        ATH1 (headers on), so each raw frame string starts with the 3-char
+        hex CAN ID (e.g. "7E806410...").  python-obd's internal ``frame.rx_id``
+        field is NOT the source address — for 11-bit physical responses it is
+        always set to the made-up tester address (0xF1), regardless of which
+        ECU sent the frame.  Instead we read ``msg.frames[0].raw[:3]`` which
+        contains the actual response CAN ID.  ``msg.parsed()`` filters out
+        non-OBD error lines ("NO DATA", "CAN ERROR") before extraction.
+
+        Only call this on a CAN protocol; see ``is_can_protocol``.
+        """
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        def _decode_physical_ids(msgs: list) -> list[int]:
+            ids = []
+            for msg in msgs:
+                if not (msg.frames and msg.parsed()):
+                    continue
+                raw = msg.frames[0].raw  # e.g. "7E806410..." (no spaces, headers on)
+                if len(raw) >= 3:
+                    try:
+                        ids.append(int(raw[:3], 16))
+                    except ValueError:
+                        pass
+            return ids
+
+        cmd = OBDCommand(
+            f"MODE01_{pid:02X}_FNC",
+            f"Mode 01 PID 0x{pid:02X} functional broadcast",
+            bytes([0x01, pid]),
+            0,
+            _decode_physical_ids,
+            ECU.ALL,
+            False,
+        )
+
+        conn = self._conn
+
+        def _send() -> list[int]:
+            iface = getattr(conn, "interface", getattr(conn, "_interface", None))
+            if iface is None:
+                return []
+            try:
+                iface.send_and_parse("ATSH 7DF")
+            except Exception as exc:
+                log.warning("ATSH 7DF failed: %s", exc)
+                return []
+            resp = conn.query(cmd, force=True)
+            if resp.is_null() or resp.value is None:
+                return []
+            return list(resp.value)
+
+        async with self._lock:
+            return await asyncio.to_thread(_send)
+
+    async def probe_ecu_tester_present(self, addr: int) -> bool:
+        """Send TesterPresent (0x3E 0x00) to *addr*; return True on positive response.
+
+        Uses the same atomic ATSH-then-request pattern as
+        ``query_uds_dtc_at_addr`` so the header change and UDS request are
+        serialised under one lock acquisition.
+
+        A positive TesterPresent response is ``0x7E 0x00``; a negative
+        response (``0x7F …``) or no reply returns ``False``.
+
+        Only call this on a CAN protocol; see ``is_can_protocol``.
+        """
+        if self._conn is None:
+            raise RuntimeError("not connected")
+
+        cmd = OBDCommand(
+            f"TP_{addr:03X}",
+            f"TesterPresent @ 0x{addr:03X}",
+            bytes([0x3E, 0x00]),
+            0,
+            _uds_passthrough,
+            ECU.ALL,
+            False,
+        )
+
+        conn = self._conn
+
+        def _atomic() -> bool:
+            iface = getattr(conn, "interface", getattr(conn, "_interface", None))
+            if iface is None:
+                return False
+            try:
+                iface.send_and_parse(f"ATSH {addr:03X}")
+            except Exception as exc:
+                log.warning("ATSH %03X failed: %s", addr, exc)
+                return False
+            resp = conn.query(cmd, force=True)
+            if resp.is_null() or resp.value is None:
+                return False
+            raw = bytes(resp.value)
+            return len(raw) >= 1 and raw[0] == 0x7E
+
+        async with self._lock:
+            return await asyncio.to_thread(_atomic)
+
     async def send_tester_present(self) -> None:
         """Send UDS TesterPresent (0x3E 0x00) keepalive — best-effort, never raises."""
         if self._conn is None:
@@ -324,6 +637,15 @@ class ObdConnection:
     @property
     def protocol_name(self) -> str:
         return self._conn.protocol_name() if self._conn else ""
+
+    @property
+    def is_can_protocol(self) -> bool:
+        """True only when the active ELM327 protocol is a CAN variant (ISO 15765 / SAE J1939).
+
+        Transmitting CAN frames at the wrong bit rate can cause bus errors on the
+        vehicle network.  Always verify this before issuing any CAN-layer request.
+        """
+        return "CAN" in self.protocol_name
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[ObdConnection]:

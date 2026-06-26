@@ -137,3 +137,60 @@ async def test_save_progress_overwrites(cache: EcuCache) -> None:
     await cache.save_progress("ECU-OW", 0x2000, "phase2")
     result = await cache.get_progress("ECU-OW")
     assert result == (0x2000, "phase2")
+
+
+# ── priority2_complete ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_mark_priority2_complete(cache: EcuCache) -> None:
+    """mark_priority2_complete sets the flag after priority1 has been marked."""
+    await cache.mark_priority1_complete("ECU-P2", vin_prefix="WV2")
+    await cache.mark_priority2_complete("ECU-P2")
+    info = await cache.get_ecu_version_info("ECU-P2")
+    assert info is not None
+    assert info["priority2_complete"] == 1
+
+
+@pytest.mark.asyncio
+async def test_mark_priority2_noop_for_unknown_ecu(cache: EcuCache) -> None:
+    """mark_priority2_complete on an unknown ECU version is a silent no-op."""
+    await cache.mark_priority2_complete("NEVER-SEEN")
+    info = await cache.get_ecu_version_info("NEVER-SEEN")
+    assert info is None
+
+
+# ── Tier C cache ──────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tier_c_not_complete_by_default(cache: EcuCache) -> None:
+    assert not await cache.tier_c_complete("WF0XXXTT")
+
+
+@pytest.mark.asyncio
+async def test_tier_c_complete_after_save(cache: EcuCache) -> None:
+    await cache.save_tier_c_results("WF0XXXTT", [0x726, 0x733])
+    assert await cache.tier_c_complete("WF0XXXTT")
+
+
+@pytest.mark.asyncio
+async def test_tier_c_addresses_round_trip(cache: EcuCache) -> None:
+    addrs = [0x710, 0x720, 0x730]
+    await cache.save_tier_c_results("WF0XXXTT", addrs)
+    result = await cache.get_tier_c_addresses("WF0XXXTT")
+    assert sorted(result) == sorted(addrs)
+
+
+@pytest.mark.asyncio
+async def test_tier_c_empty_result_marks_complete(cache: EcuCache) -> None:
+    """Saving an empty Tier C result (nothing found) still marks the sweep complete."""
+    await cache.save_tier_c_results("WF0XXXTT", [])
+    assert await cache.tier_c_complete("WF0XXXTT")
+    assert await cache.get_tier_c_addresses("WF0XXXTT") == []
+
+
+@pytest.mark.asyncio
+async def test_tier_c_isolated_by_vin_prefix(cache: EcuCache) -> None:
+    """Tier C results for one VIN prefix don't bleed into another."""
+    await cache.save_tier_c_results("WF0XXXTT", [0x726])
+    assert not await cache.tier_c_complete("WVW00000")
+    assert await cache.get_tier_c_addresses("WVW00000") == []

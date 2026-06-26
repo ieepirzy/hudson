@@ -40,6 +40,19 @@ CREATE TABLE IF NOT EXISTS discovery_progress (
     last_identifier  INTEGER,
     phase            TEXT
 );
+
+-- Physical ECU addresses found by Tier C brute-force, keyed by VIN prefix.
+-- Persisted so subsequent starts skip the slow brute-force sweep.
+CREATE TABLE IF NOT EXISTS tier_c_complete (
+    vin_prefix    TEXT PRIMARY KEY,
+    discovered_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tier_c_addresses (
+    vin_prefix  TEXT,
+    address     INTEGER,
+    PRIMARY KEY (vin_prefix, address)
+);
 """
 
 
@@ -140,3 +153,43 @@ class EcuCache:
             ) as cur:
                 row = await cur.fetchone()
                 return bool(row and row[0])
+
+    async def mark_priority2_complete(self, ecu_version: str) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "UPDATE ecu_versions SET priority2_complete = 1 WHERE ecu_version = ?",
+                (ecu_version,),
+            )
+            await db.commit()
+
+    async def tier_c_complete(self, vin_prefix: str) -> bool:
+        """True when a Tier C brute-force sweep has been completed for this VIN prefix."""
+        async with aiosqlite.connect(self._path) as db:
+            async with db.execute(
+                "SELECT 1 FROM tier_c_complete WHERE vin_prefix = ?",
+                (vin_prefix,),
+            ) as cur:
+                return await cur.fetchone() is not None
+
+    async def get_tier_c_addresses(self, vin_prefix: str) -> list[int]:
+        """Return cached Tier C addresses for *vin_prefix* (may be empty list)."""
+        async with aiosqlite.connect(self._path) as db:
+            async with db.execute(
+                "SELECT address FROM tier_c_addresses WHERE vin_prefix = ? ORDER BY address",
+                (vin_prefix,),
+            ) as cur:
+                return [row[0] for row in await cur.fetchall()]
+
+    async def save_tier_c_results(self, vin_prefix: str, addresses: list[int]) -> None:
+        """Persist Tier C brute-force results and mark the sweep complete."""
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO tier_c_complete (vin_prefix, discovered_at) VALUES (?, ?)",
+                (vin_prefix, now),
+            )
+            await db.executemany(
+                "INSERT OR REPLACE INTO tier_c_addresses (vin_prefix, address) VALUES (?, ?)",
+                [(vin_prefix, addr) for addr in addresses],
+            )
+            await db.commit()

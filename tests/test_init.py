@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+from Hudson.core.connection import MODE22_TIMEOUT_S, UdsResponse, UdsResponseStatus
 from Hudson.core.init import InitEvent, InitResult, InitStep, run_init
 from tests.fixtures.fake_connection import (
     FakeConnection,
@@ -32,6 +33,12 @@ class FakeNoUdsConnection(FakeConnection):
     async def query_uds(self, service: int, identifier: int, timeout: float = 0.15) -> bytes | None:
         await asyncio.sleep(0.01)
         return None
+
+    async def query_uds_at_addr(
+        self, ecu_addr: int, identifier: int, timeout: float = MODE22_TIMEOUT_S
+    ) -> UdsResponse:
+        await asyncio.sleep(0.01)
+        return UdsResponse(UdsResponseStatus.NO_RESPONSE)
 
 
 class FakeKLineConnection(FakeNoUdsConnection):
@@ -123,8 +130,9 @@ async def test_all_init_steps_emit_events() -> None:
     steps_seen = {e.step for e in events}
     expected = {
         InitStep.CONNECT, InitStep.PROTOCOL, InitStep.VIN,
-        InitStep.MANUFACTURER, InitStep.ECU_VERSION, InitStep.UDS_DISCOVERY,
-        InitStep.KWP_SESSION, InitStep.SUPPORTED_PIDS, InitStep.READY,
+        InitStep.MANUFACTURER, InitStep.ECU_DISCOVERY, InitStep.ECU_VERSION,
+        InitStep.UDS_DISCOVERY, InitStep.KWP_SESSION, InitStep.SUPPORTED_PIDS,
+        InitStep.READY,
     }
     assert expected <= steps_seen
 
@@ -182,13 +190,23 @@ async def test_vin_null_selects_generic_manufacturer() -> None:
 
 @pytest.mark.asyncio
 async def test_kline_protocol_skips_uds() -> None:
-    """K-line protocol forces strategy=mode01_only; all UDS steps are 'not applicable'."""
+    """K-line protocol forces strategy=mode01_only; UDS and ECU discovery steps are 'not applicable'."""
     conn = FakeKLineConnection(vin="YV1RS61T242397765")  # Volvo S60
     _, events = await _run(conn)
     uds_events = _step_events(events, InitStep.UDS_DISCOVERY)
     assert any(e.done and "not applicable" in e.detail for e in uds_events)
     ecu_events = _step_events(events, InitStep.ECU_VERSION)
     assert any(e.done and "not applicable" in e.detail for e in ecu_events)
+    disc_events = _step_events(events, InitStep.ECU_DISCOVERY)
+    assert any(e.done and "not applicable" in e.detail for e in disc_events)
+
+
+@pytest.mark.asyncio
+async def test_can_protocol_populates_discovered_ecus() -> None:
+    """CAN protocol runs ECU discovery; discovered_ecus is populated in InitResult."""
+    conn = FakeNoUdsConnection(vin="WF0XXXTTGXXX00001")  # Ford VIN
+    result, _ = await _run(conn)
+    assert result.discovered_ecus is not None
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from Hudson.core.dtc import DtcRecord, decode_kwp_dtc_list
+
 if TYPE_CHECKING:
     from Hudson.core.connection import ObdConnection
 
@@ -63,15 +65,30 @@ class KwpBlock:
 # ── Session ───────────────────────────────────────────────────────────────────
 
 class KwpSession:
-    """ISO 14230 KWP2000 diagnostic session over K-line via ELM327.
+    """KWP2000 diagnostic session, supporting both K-line and CAN transport.
+
+    ``transport`` selects the physical layer:
+
+    - ``"kline"`` — ISO 14230-4 via ELM327 ATSP3/ATSP4 (K-line fast/slow init).
+    - ``"can"``   — KWP2000 application layer wrapped in ISO-TP (ISO 15765-2)
+                    over the already-active CAN protocol.  The ELM327 handles
+                    ISO-TP framing automatically; only the ECU header (ATSH)
+                    needs to be set.
+    - ``None``    — auto-detect from ``connection.is_can_protocol`` at
+                    construction time (default).
+
+    ``ecu_addr`` is the CAN ECU header address used with ``ATSH`` for CAN
+    transport; it is ignored on K-line.
 
     Pass ``mock_responses`` to enable mock mode for unit tests.  The dict
     maps block_id → raw data bytes (positive-response header already
-    stripped, as returned by the real transport).  Pass ``None`` for real
-    hardware.
+    stripped).  Pass ``None`` for real hardware.
 
-    Manufacturer modules are responsible for supplying their own mock
-    response fixtures — this class has no knowledge of block semantics.
+    .. note::
+        KWP2000 over CAN (``transport="can"``) has not been validated on
+        real hardware.  The ``0x81`` standardDiagnosticMode sub-function in
+        ``StartDiagnosticSession`` is portable in practice, but behaviour
+        on specific ECUs should be verified before relying on it.
 
     Example::
 
@@ -90,9 +107,17 @@ class KwpSession:
         self,
         connection: ObdConnection,
         *,
+        transport: str | None = None,
+        ecu_addr: int = 0x7E0,
         mock_responses: dict[int, bytes] | None = None,
     ) -> None:
+        if transport is None:
+            transport = "can" if connection.is_can_protocol else "kline"
+        if transport not in ("kline", "can"):
+            raise ValueError(f"transport must be 'kline' or 'can', got {transport!r}")
         self._connection = connection
+        self._transport = transport
+        self._ecu_addr = ecu_addr
         self._mock_responses = mock_responses
         self._started = False
 
@@ -100,19 +125,27 @@ class KwpSession:
     def is_mock(self) -> bool:
         return self._mock_responses is not None
 
+    @property
+    def transport(self) -> str:
+        return self._transport
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start_diagnostic_session(self) -> bool:
         """Send KWP2000 StartDiagnosticSession (service 0x10).
 
-        Returns True on success, False if the ECU didn't respond or the
-        real transport is not yet implemented.
+        Returns True on success, False if the ECU did not respond.
         """
         if self.is_mock:
             self._started = True
-            log.debug("KWP2000 mock session started")
+            log.debug("KWP2000 mock session started (transport=%s)", self._transport)
             return True
 
+        if self._transport == "kline":
+            return await self._start_kline()
+        return await self._start_can()
+
+    async def _start_kline(self) -> bool:
         try:
             await self._connection.send_at("ATSP3")
             await asyncio.sleep(_KLINE_SWITCH_DELAY)
@@ -122,23 +155,41 @@ class KwpSession:
                 self._started = True
                 log.info("KWP2000 K-line session started")
                 return True
-            log.warning("KWP2000 StartDiagnosticSession: no positive response")
+            log.warning("KWP2000 StartDiagnosticSession (K-line): no positive response")
             return False
         finally:
             if not self._started:
                 await self._connection.send_at("ATSP0")
 
+    async def _start_can(self) -> bool:
+        await self._connection.send_at(f"ATSH {self._ecu_addr:03X}")
+        resp = await self._connection.query_kwp_service(0x10, b"\x81")
+        if resp is not None:
+            self._started = True
+            log.info("KWP2000 CAN session started (ECU 0x%03X)", self._ecu_addr)
+            return True
+        log.warning(
+            "KWP2000 StartDiagnosticSession (CAN @ 0x%03X): no positive response",
+            self._ecu_addr,
+        )
+        return False
+
     async def close(self) -> None:
         """Close the session — best-effort, never raises."""
         if self._started and not self.is_mock:
             try:
+                if self._transport == "can":
+                    # Re-assert ATSH: intervening code (e.g. UDS DTC scanner) may
+                    # have changed the header since _start_can() set it.
+                    await self._connection.send_at(f"ATSH {self._ecu_addr:03X}")
                 await self._connection.query_kwp_service(0x20)
             except Exception as exc:
                 log.warning("KWP2000 StopDiagnosticSession failed: %s", exc)
             finally:
-                await self._connection.send_at("ATSP0")
+                if self._transport == "kline":
+                    await self._connection.send_at("ATSP0")
         self._started = False
-        log.debug("KWP2000 session closed")
+        log.debug("KWP2000 session closed (transport=%s)", self._transport)
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
@@ -156,9 +207,26 @@ class KwpSession:
         if self.is_mock:
             return self._mock_responses.get(block_id)  # type: ignore[union-attr]
 
-        # After ATSP3, the ELM327 routes mode-0x21 frames over K-line —
-        # query_enhanced_local sends [0x21, block_id] and strips the 0x61 echo.
         return await self._connection.query_enhanced_local(block_id)
+
+    async def read_dtcs(self, status_mask: int = 0xFF) -> list[DtcRecord]:
+        """ReadDiagnosticTroubleCodesByStatus (KWP2000 service 0x18).
+
+        ``status_mask=0xFF`` requests all DTCs regardless of status.
+        Returns an empty list if the session is not started, is in mock mode,
+        or the ECU does not respond.
+        """
+        if not self._started or self.is_mock:
+            return []
+
+        # Payload: [status_mask, group_hi, group_lo] — group 0x0000 = all groups.
+        # query_kwp_service strips the positive-response byte (0x58).
+        # Response after strip: [numberOfDTC, hi, lo, status, ...]
+        resp = await self._connection.query_kwp_service(0x18, bytes([status_mask, 0x00, 0x00]))
+        if resp is None or len(resp) < 1:
+            return []
+        # resp[0] = numberOfDTC; resp[1:] = 3-byte records
+        return decode_kwp_dtc_list(resp[1:])
 
     # ── Parsing ───────────────────────────────────────────────────────────────
 

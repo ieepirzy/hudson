@@ -13,23 +13,41 @@ import logging
 from collections.abc import Awaitable, Callable
 from time import monotonic
 
-from Hudson.core.connection import ObdConnection
+from Hudson.core.connection import ObdConnection, UdsResponseStatus
 from Hudson.core.ecu_cache import EcuCache
 
 log = logging.getLogger(__name__)
 
 # ── Identifier ranges ─────────────────────────────────────────────────────────
 
+# Default P1 range: ISO 14229 standardised vehicle-info block + common extended data.
 PRIORITY1_RANGES: list[tuple[int, int]] = [
     (0xF100, 0xF1FF),  # standardised vehicle info (VIN, SW versions, …)
-    (0xF400, 0xF4FF),  # VAG engine measuring blocks
-    (0xF600, 0xF6FF),  # VAG transmission data
     (0x0600, 0x06FF),  # common UDS extended data
 ]
+
+# VAG-specific P1 additions: Ross-Tech VCDS measuring-block identifiers for
+# engine (0xF4xx) and transmission (0xF6xx) parameter groups.
+# Source: VAG K+CAN sniffed protocol notes / vw_audi.py module header.
+_PRIORITY1_RANGES_VAG: list[tuple[int, int]] = [
+    (0xF100, 0xF1FF),
+    (0xF400, 0xF4FF),  # VAG engine measuring blocks
+    (0xF600, 0xF6FF),  # VAG transmission data
+    (0x0600, 0x06FF),
+]
+
+# Maps InitResult.manufacturer_name (lowercased) → priority-1 ranges.
+_PRIORITY1_RANGES_BY_MAKE: dict[str, list[tuple[int, int]]] = {
+    "vw/audi": _PRIORITY1_RANGES_VAG,
+}
 
 PRIORITY2_RANGES: list[tuple[int, int]] = [
     (0x0000, 0xFFFF),  # full sweep — background only, 5 req/sec
 ]
+
+
+def _priority1_ranges_for_make(make: str) -> list[tuple[int, int]]:
+    return _PRIORITY1_RANGES_BY_MAKE.get(make.lower(), PRIORITY1_RANGES)
 
 # Fake responding identifiers returned in --mock mode.
 MOCK_UDS_IDENTIFIERS: list[int] = [0xF189, 0xF190, 0xF400, 0xF401, 0xF40B, 0xF40C]
@@ -68,18 +86,27 @@ class UdsDiscovery:
         connection: ObdConnection,
         cache: EcuCache,
         ecu_version: str,
+        make: str = "",
+        ecu_addr: int = 0x7E0,
     ) -> None:
         self._connection = connection
         self._cache = cache
         self.ecu_version = ecu_version
+        self._make = make
+        self._ecu_addr = ecu_addr
         self._p1_responding: list[int] = []
+
+    @property
+    def cache_key(self) -> str:
+        """Cache key incorporating ECU address so per-address data is isolated."""
+        return f"{self._ecu_addr:03X}:{self.ecu_version}"
 
     async def read_ecu_version(self) -> str | None:
         """Query identifier 0xF189 (SW version string) and return decoded text."""
-        data = await self._connection.query_uds(0x22, 0xF189)
-        if not data:
+        response = await self._connection.query_uds_at_addr(self._ecu_addr, 0xF189)
+        if not response.data:
             return None
-        return data.decode("ascii", errors="replace").strip("\x00 ")
+        return response.data.decode("ascii", errors="replace").strip("\x00 ")
 
     # ── Priority 1 ───────────────────────────────────────────────────────────
 
@@ -90,12 +117,12 @@ class UdsDiscovery:
         return await self._run_priority1_real(on_progress)
 
     async def _run_priority1_real(self, on_progress: ProgressCallback) -> list[int]:
-        identifiers = _build_identifiers(PRIORITY1_RANGES)
+        identifiers = _build_identifiers(_priority1_ranges_for_make(self._make))
         total = len(identifiers)
 
         # Resume from a previous interrupted run if possible.
         start_idx = 0
-        saved = await self._cache.get_progress(self.ecu_version)
+        saved = await self._cache.get_progress(self.cache_key)
         if saved and saved[1] == "priority1":
             last = saved[0]
             for i, ident in enumerate(identifiers):
@@ -114,8 +141,8 @@ class UdsDiscovery:
             batch.append((identifier, responded, raw))
 
             if len(batch) >= _SAVE_BATCH_SIZE:
-                await self._cache.save_identifiers_batch(self.ecu_version, batch)
-                await self._cache.save_progress(self.ecu_version, identifier, "priority1")
+                await self._cache.save_identifiers_batch(self.cache_key, batch)
+                await self._cache.save_progress(self.cache_key, identifier, "priority1")
                 batch.clear()
 
             now = monotonic()
@@ -126,16 +153,16 @@ class UdsDiscovery:
             await on_progress(i + 1, total, identifier, responded)
 
         if batch:
-            await self._cache.save_identifiers_batch(self.ecu_version, batch)
+            await self._cache.save_identifiers_batch(self.cache_key, batch)
 
         vin_prefix = self.ecu_version[:3] if len(self.ecu_version) >= 3 else self.ecu_version
-        await self._cache.mark_priority1_complete(self.ecu_version, vin_prefix)
+        await self._cache.mark_priority1_complete(self.cache_key, vin_prefix)
         self._p1_responding = responding
         return responding
 
     async def _run_priority1_mock(self, on_progress: ProgressCallback) -> list[int]:
         """Fake priority-1 sweep with animated progress (~2 seconds)."""
-        identifiers = _build_identifiers(PRIORITY1_RANGES)
+        identifiers = _build_identifiers(_priority1_ranges_for_make(self._make))
         total = len(identifiers)
         responding: list[int] = []
 
@@ -171,7 +198,7 @@ class UdsDiscovery:
         total = len(identifiers)
 
         start_idx = 0
-        saved = await self._cache.get_progress(self.ecu_version)
+        saved = await self._cache.get_progress(self.cache_key)
         if saved and saved[1] == "priority2":
             last = saved[0]
             for i, ident in enumerate(identifiers):
@@ -188,8 +215,8 @@ class UdsDiscovery:
             batch.append((identifier, responded, raw))
 
             if len(batch) >= _SAVE_BATCH_SIZE:
-                await self._cache.save_identifiers_batch(self.ecu_version, batch)
-                await self._cache.save_progress(self.ecu_version, identifier, "priority2")
+                await self._cache.save_identifiers_batch(self.cache_key, batch)
+                await self._cache.save_progress(self.cache_key, identifier, "priority2")
                 batch.clear()
 
             if on_progress is not None:
@@ -203,17 +230,20 @@ class UdsDiscovery:
             await asyncio.sleep(delay)
 
         if batch:
-            await self._cache.save_identifiers_batch(self.ecu_version, batch)
+            await self._cache.save_identifiers_batch(self.cache_key, batch)
+
+        await self._cache.mark_priority2_complete(self.cache_key)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
     async def _probe_identifier(self, identifier: int) -> tuple[bool, bytes | None]:
         try:
-            data = await asyncio.wait_for(
-                self._connection.query_uds(0x22, identifier),
+            response = await asyncio.wait_for(
+                self._connection.query_uds_at_addr(self._ecu_addr, identifier),
                 timeout=_DEFAULT_TIMEOUT,
             )
-            return (data is not None, data)
+            ok = response.status == UdsResponseStatus.OK
+            return (ok, response.data if ok else None)
         except asyncio.TimeoutError:
             return (False, None)
         except Exception as exc:

@@ -34,6 +34,7 @@ from Hudson.core.connection import ObdConnection
 from Hudson.core.ecu_cache import EcuCache
 from Hudson.core.kwp2000 import KwpSession
 from Hudson.core.uds import UdsDiscovery
+from Hudson.core.uds_dtc import EcuDiscoveryResult, discover_ecus
 from Hudson.core.vin import resolve_vin_chain
 from Hudson.manufacturers.registry import select_decoder
 
@@ -48,6 +49,7 @@ class InitStep(Enum):
     PROTOCOL = auto()
     VIN = auto()
     MANUFACTURER = auto()
+    ECU_DISCOVERY = auto()   # CAN: tiered physical ECU address discovery (Tier A/B/C)
     ECU_VERSION = auto()     # UDS: query 0xF189 for ECU software version
     UDS_DISCOVERY = auto()   # UDS: priority-1 identifier sweep
     KWP_SESSION = auto()     # KWP2000: K-line session attempt (pre-2007 vehicles)
@@ -78,7 +80,14 @@ class InitResult:
     ecu_version: str | None = None
     uds_identifiers: list[int] = field(default_factory=list)
     uds_discovery: UdsDiscovery | None = None
+    # All per-ECU discovery objects: addr → UdsDiscovery.
+    # ECM (0x7E0) is populated during init; secondary ECUs are added lazily in
+    # the main-screen background coordinator as they are swept.
+    uds_discoveries: dict[int, UdsDiscovery] = field(default_factory=dict)
     kwp_session: KwpSession | None = None
+    discovered_ecus: EcuDiscoveryResult | None = None
+    # Shared SQLite cache reused by the main-screen background sweep coordinator.
+    cache: EcuCache | None = None
     dtcdecode_make: str | None = None  # set by splash screen after make selection
 
 
@@ -93,6 +102,9 @@ async def run_init(
     as a non-fatal error event and execution continues.
     """
     result = InitResult()
+    cache = EcuCache()
+    await cache.init()
+    result.cache = cache
 
     # ── 1. Connect ───────────────────────────────────────────────────────────
     await events.put(InitEvent(InitStep.CONNECT, "opening serial connection"))
@@ -142,14 +154,49 @@ async def run_init(
             result.manufacturer_module = None
         result.manufacturer_name = "Generic"
 
+    # ── 4b. ECU discovery ────────────────────────────────────────────────────
+    # Discover physical ECU addresses on the CAN bus (Tier A functional broadcast,
+    # Tier B known-address table, Tier C brute-force).  Results are used by the
+    # DTC pane to scan every present ECU rather than only the standard J1979 set.
+    # K-line protocols cannot use CAN addressing — skip entirely.
+    _proto = result.protocol_name.lower()
+    _is_kline = any(kw in _proto for kw in ("9141", "14230", "kwp"))
+    vin_prefix = result.vin[:8] if result.vin else ""
+
+    await events.put(InitEvent(InitStep.ECU_DISCOVERY, "probing physical ECU addresses"))
+    if not _is_kline:
+        try:
+            result.discovered_ecus = await discover_ecus(
+                connection,
+                result.manufacturer_name,
+                cache=cache,
+                vin_prefix=vin_prefix,
+            )
+            n = len(result.discovered_ecus.found)
+            await events.put(
+                InitEvent(InitStep.ECU_DISCOVERY, f"{n} ECU(s) found", done=True)
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("ECU address discovery failed")
+            await events.put(
+                InitEvent(
+                    InitStep.ECU_DISCOVERY,
+                    "discovery failed",
+                    error=str(exc),
+                    done=True,
+                )
+            )
+    else:
+        await events.put(
+            InitEvent(InitStep.ECU_DISCOVERY, "not applicable (K-line)", done=True)
+        )
+
     # ── 5 & 6. UDS discovery ─────────────────────────────────────────────────
     strategy = getattr(result.manufacturer_module, "DISCOVERY_STRATEGY", "probe")
 
     # UDS (service 0x22) only makes sense over CAN. Sending it over a K-line
     # protocol (ISO 9141-2, KWP2000) confuses the ELM327 state machine and
     # corrupts subsequent mode 01 queries — skip entirely for K-line.
-    _proto = result.protocol_name.lower()
-    _is_kline = any(kw in _proto for kw in ("9141", "14230", "kwp"))
     if _is_kline:
         strategy = "mode01_only"
         log.info("K-line protocol detected (%s) — skipping UDS discovery", result.protocol_name)
@@ -158,7 +205,11 @@ async def run_init(
     # "uds"    → manufacturer is certain; skip the probe gate, go straight to discovery
     # anything else → mode01_only, skip UDS entirely
     if strategy in ("uds", "probe"):
-        await _run_uds_steps(connection, events, result, probe_only=(strategy == "probe"))
+        await _run_uds_steps(
+            connection, events, result,
+            probe_only=(strategy == "probe"),
+            cache=cache,
+        )
     else:
         await events.put(InitEvent(InitStep.ECU_VERSION, "not applicable", done=True))
         await events.put(InitEvent(InitStep.UDS_DISCOVERY, "not applicable", done=True))
@@ -186,6 +237,7 @@ async def _run_uds_steps(
     result: InitResult,
     *,
     probe_only: bool = False,
+    cache: EcuCache,
 ) -> None:
     """Execute ECU_VERSION and UDS_DISCOVERY init steps.
 
@@ -201,11 +253,8 @@ async def _run_uds_steps(
         detail = "probing for UDS capability (0xF189)"
     await events.put(InitEvent(InitStep.ECU_VERSION, detail))
 
-    cache = EcuCache()
-    await cache.init()
-
     fallback_version = f"vin:{result.vin[:8]}" if result.vin else "unknown"
-    discovery = UdsDiscovery(connection, cache, fallback_version)
+    discovery = UdsDiscovery(connection, cache, fallback_version, make=result.manufacturer_name)
 
     ecu_version = await discovery.read_ecu_version()
     if ecu_version is None:
@@ -247,6 +296,7 @@ async def _run_uds_steps(
     discovery.ecu_version = ecu_version
     result.ecu_version = ecu_version
     result.uds_discovery = discovery
+    result.uds_discoveries[0x7E0] = discovery
     await events.put(InitEvent(InitStep.ECU_VERSION, ecu_version, done=True))
 
     # ── 6. UDS discovery ─────────────────────────────────────────────────────
@@ -257,11 +307,13 @@ async def _run_uds_steps(
         )
     )
 
-    if await cache.priority1_complete(discovery.ecu_version):
-        cached = await cache.get_discovered_identifiers(discovery.ecu_version)
+    if await cache.priority1_complete(discovery.cache_key):
+        cached = await cache.get_discovered_identifiers(discovery.cache_key)
         ids = [r["identifier"] for r in cached if r["responded"]]
         result.uds_identifiers = ids
         discovery._p1_responding = ids  # allow priority-2 background sweep to proceed
+        result.uds_discovery = discovery
+        result.uds_discoveries[0x7E0] = discovery
         await events.put(
             InitEvent(
                 InitStep.UDS_DISCOVERY,

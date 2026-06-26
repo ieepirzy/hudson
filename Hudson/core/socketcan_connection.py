@@ -32,6 +32,8 @@ import can
 import isotp
 import obd
 
+from Hudson.core.connection import MODE22_TIMEOUT_S, UdsResponse, UdsResponseStatus
+
 if TYPE_CHECKING:
     from obd import OBDCommand
 
@@ -291,6 +293,84 @@ class SocketCanConnection:
         if raw[0] == 0x62 and raw[1] == hi and raw[2] == lo:
             return bytes(raw[3:])
         return None
+
+    async def query_uds_dtc_at_addr(
+        self,
+        ecu_addr: int,
+        sub_fn: int,
+        params: bytes = b"",
+    ) -> UdsResponse:
+        """Send a UDS 0x19 (ReadDTCInformation) request to a specific ECU address.
+
+        The tx/rx pair is derived from ecu_addr and used only for this query;
+        `self._tx_id`/`_rx_id` are not modified. ISO-TP multi-frame reassembly
+        is handled by python-can-isotp (CanStack), so FC truncation does not
+        occur on this path — LIKELY_TRUNCATED_MULTIFRAME is never returned here.
+        """
+        if self._bus is None:
+            raise RuntimeError("not connected")
+
+        rx_id = ecu_addr + 8 if 0x7E0 <= ecu_addr <= 0x7E7 else ecu_addr + 1
+        request = bytes([0x19, sub_fn]) + params
+
+        def _blocking() -> bytes | None:
+            addr = isotp.Address(isotp.AddressingMode.Normal_11bits, txid=ecu_addr, rxid=rx_id)
+            stack = isotp.CanStack(bus=self._bus, address=addr)
+            stack.send(request)
+            deadline = time.monotonic() + self._QUERY_TIMEOUT
+            while time.monotonic() < deadline:
+                stack.process()
+                if stack.available():
+                    return stack.recv()
+                time.sleep(0.001)
+            return None
+
+        async with self._lock:
+            raw = await asyncio.to_thread(_blocking)
+
+        # Response layout: [0x59, sub_fn, DTCStatusAvailabilityMask, record…]
+        if raw is None or len(raw) < 3 or raw[0] != 0x59 or raw[1] != sub_fn:
+            return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+        return UdsResponse(UdsResponseStatus.OK, data=bytes(raw[3:]))
+
+    async def query_uds_at_addr(
+        self,
+        ecu_addr: int,
+        identifier: int,
+        timeout: float = MODE22_TIMEOUT_S,
+    ) -> UdsResponse:
+        """Send UDS 0x22 ReadDataByIdentifier to a specific ECU address.
+
+        *timeout* is accepted for interface compatibility with ObdConnection but
+        is not wired to any ELM327 AT command on this path — SocketCAN uses the
+        internal _QUERY_TIMEOUT which is set at construction time.
+        """
+        if self._bus is None:
+            raise RuntimeError("not connected")
+
+        hi, lo = (identifier >> 8) & 0xFF, identifier & 0xFF
+        rx_id = ecu_addr + 8 if 0x7E0 <= ecu_addr <= 0x7E7 else ecu_addr + 1
+
+        def _blocking() -> bytes | None:
+            addr = isotp.Address(isotp.AddressingMode.Normal_11bits, txid=ecu_addr, rxid=rx_id)
+            stack = isotp.CanStack(bus=self._bus, address=addr)
+            stack.send(bytes([0x22, hi, lo]))
+            deadline = time.monotonic() + self._QUERY_TIMEOUT
+            while time.monotonic() < deadline:
+                stack.process()
+                if stack.available():
+                    return stack.recv()
+                time.sleep(0.001)
+            return None
+
+        async with self._lock:
+            raw = await asyncio.to_thread(_blocking)
+
+        if raw is None or len(raw) < 3:
+            return UdsResponse(UdsResponseStatus.NO_RESPONSE)
+        if raw[0] == 0x62 and raw[1] == hi and raw[2] == lo:
+            return UdsResponse(UdsResponseStatus.OK, data=bytes(raw[3:]))
+        return UdsResponse(UdsResponseStatus.NO_RESPONSE)
 
     async def query_kwp_service(
         self,

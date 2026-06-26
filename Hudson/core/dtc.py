@@ -27,8 +27,11 @@ So the bytes 0x01 0x33 decode to "P0133":
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Final
+
+log = logging.getLogger(__name__)
 
 _SYSTEM_LETTERS: Final[dict[int, str]] = {
     0b00: "P",
@@ -65,6 +68,67 @@ class DTC:
 
     def __str__(self) -> str:
         return self.code
+
+
+@dataclass(frozen=True, slots=True)
+class DtcStatus:
+    """Status byte from UDS 0x19 or KWP 0x18 — bit layout per ISO 15031-6 / J1979."""
+
+    raw: int
+
+    @property
+    def test_failed(self) -> bool:
+        return bool(self.raw & 0x01)
+
+    @property
+    def test_failed_this_op_cycle(self) -> bool:
+        return bool(self.raw & 0x02)
+
+    @property
+    def pending(self) -> bool:
+        return bool(self.raw & 0x04)
+
+    @property
+    def confirmed(self) -> bool:
+        return bool(self.raw & 0x08)
+
+    @property
+    def test_not_completed_since_clear(self) -> bool:
+        return bool(self.raw & 0x10)
+
+    @property
+    def test_failed_since_clear(self) -> bool:
+        return bool(self.raw & 0x20)
+
+    @property
+    def test_not_completed_this_op_cycle(self) -> bool:
+        return bool(self.raw & 0x40)
+
+    @property
+    def mil_on(self) -> bool:
+        return bool(self.raw & 0x80)
+
+    def flags_str(self) -> str:
+        """Compact flag string for UI display: T=testFailed P=pending C=confirmed M=MIL."""
+        flags = []
+        if self.test_failed:
+            flags.append("T")
+        if self.pending:
+            flags.append("P")
+        if self.confirmed:
+            flags.append("C")
+        if self.mil_on:
+            flags.append("M")
+        return "".join(flags) if flags else "—"
+
+
+@dataclass(frozen=True, slots=True)
+class DtcRecord:
+    """A DTC with its status byte, as returned by UDS 0x19 or KWP 0x18."""
+
+    dtc: DTC
+    status: DtcStatus
+    failure_type: int = 0  # UDS 3-byte DTC low byte; 0x00 for standard J2012 codes
 
 
 def decode_dtc(byte_a: int, byte_b: int) -> DTC | None:
@@ -124,3 +188,44 @@ def encode_dtc(code: str) -> tuple[int, int]:
     byte_a = (system_bits << 6) | (first_digit << 4) | tail_high
     byte_b = tail_low
     return byte_a, byte_b
+
+
+def decode_uds_dtc_list(payload: bytes) -> list[DtcRecord]:
+    """Decode UDS 0x19 records (response header already stripped).
+
+    Each record is 4 bytes: [hi, mid, lo, status_byte].
+    `hi` and `mid` are the J2012 DTC bytes; `lo` is the failure type
+    (0x00 for standard codes). Null DTC pairs (hi=0, mid=0) are skipped.
+    Empty payload is valid (zero DTCs stored) and returns [] without warning.
+    Non-empty payloads whose length is not a multiple of 4 indicate a truncated
+    response; the trailing partial record is ignored and a warning is logged.
+    """
+    if payload and len(payload) % 4 != 0:
+        log.warning(
+            "decode_uds_dtc_list: payload length %d is not a multiple of 4 — "
+            "trailing %d byte(s) ignored (possible truncated response)",
+            len(payload),
+            len(payload) % 4,
+        )
+    records: list[DtcRecord] = []
+    for i in range(0, len(payload) - 3, 4):
+        hi, mid, lo, status = payload[i], payload[i + 1], payload[i + 2], payload[i + 3]
+        dtc = decode_dtc(hi, mid)
+        if dtc is not None:
+            records.append(DtcRecord(dtc=dtc, status=DtcStatus(raw=status), failure_type=lo))
+    return records
+
+
+def decode_kwp_dtc_list(payload: bytes) -> list[DtcRecord]:
+    """Decode KWP 0x18 records (numberOfDTC byte already stripped).
+
+    Each record is 3 bytes: [hi, lo, status_byte].
+    Null DTC pairs (hi=0, lo=0) are skipped.
+    """
+    records: list[DtcRecord] = []
+    for i in range(0, len(payload) - 2, 3):
+        hi, lo, status = payload[i], payload[i + 1], payload[i + 2]
+        dtc = decode_dtc(hi, lo)
+        if dtc is not None:
+            records.append(DtcRecord(dtc=dtc, status=DtcStatus(raw=status)))
+    return records

@@ -27,6 +27,7 @@ from textual.widgets import Static
 from Hudson.core.connection import ObdConnection
 from Hudson.core.init import InitResult
 from Hudson.core.poller import Poller, PollSpec, Reading
+from Hudson.core.uds import UdsDiscovery
 from Hudson.tui.panes.dashboard import DashboardPane
 from Hudson.tui.panes.dtcs import DtcPane
 from Hudson.tui.panes.log import LogPane
@@ -60,7 +61,14 @@ class UdsScanStrip(Static):
     }
     """
 
-    def show_scanning(self, current: int, total: int, responding: int, elapsed: float) -> None:
+    def show_scanning(
+        self,
+        current: int,
+        total: int,
+        responding: int,
+        elapsed: float,
+        label: str = "",
+    ) -> None:
         self.add_class("--active")
         rate = current / elapsed if elapsed > 0 else 1.0
         eta_s = (total - current) / rate if rate > 0 else 0.0
@@ -73,7 +81,8 @@ class UdsScanStrip(Static):
         pct = int(current / total * 100)
         filled = round(current / total * _SCAN_BAR_WIDTH)
         bar = f"[{'█' * filled}{'░' * (_SCAN_BAR_WIDTH - filled)}]"
-        self.update(f" UDS scan  {bar}  {pct:3d}%   ETA {eta}   {responding} found")
+        label_part = f"  {label}" if label else ""
+        self.update(f" UDS scan{label_part}  {bar}  {pct:3d}%   ETA {eta}   {responding} found")
 
     def show_complete(self, responding: int) -> None:
         self.add_class("--active")
@@ -181,6 +190,7 @@ class MainScreen(Screen[None]):
         self._uds_task: asyncio.Task[None] | None = None
         self._uds_responding = 0
         self._uds_start = 0.0
+        self._uds_label = ""
 
     def compose(self) -> ComposeResult:
         info = (
@@ -216,13 +226,14 @@ class MainScreen(Screen[None]):
             self._poller = Poller(self._connection, active_specs, self._queue, on_reading=on_reading)
             await self._poller.start()
 
-        if self._init.uds_discovery is not None:
-            self._uds_start = monotonic()
-            self._uds_task = asyncio.create_task(
-                self._init.uds_discovery.run_priority2_background(
-                    on_progress=self._on_uds_progress,
-                )
-            )
+        has_uds = self._init.uds_discovery is not None
+        has_secondary = (
+            self._init.discovered_ecus is not None
+            and any(a != 0x7E0 for a in self._init.discovered_ecus.found)
+            and self._init.cache is not None
+        )
+        if has_uds or has_secondary:
+            self._uds_task = asyncio.create_task(self._run_uds_background())
             self._uds_task.add_done_callback(self._on_uds_done)
 
     async def on_unmount(self) -> None:
@@ -244,11 +255,63 @@ class MainScreen(Screen[None]):
             elapsed = monotonic() - self._uds_start
             try:
                 self.query_one(UdsScanStrip).show_scanning(
-                    current, total, self._uds_responding, elapsed
+                    current, total, self._uds_responding, elapsed, self._uds_label
                 )
             except Exception:
                 # Widget removed if screen was dismounted mid-sweep; not an error.
                 pass
+
+    async def _run_uds_background(self) -> None:
+        """Sequential UDS background sweep: ECM priority-2, then secondary ECUs."""
+        # ── ECM priority-2 ───────────────────────────────────────────────────
+        if self._init.uds_discovery is not None:
+            self._uds_label = "ECM 7E0"
+            self._uds_start = monotonic()
+            self._uds_responding = 0
+            await self._init.uds_discovery.run_priority2_background(
+                on_progress=self._on_uds_progress,
+            )
+
+        # ── Secondary ECUs: P1 then P2, one at a time ────────────────────────
+        disc = self._init.discovered_ecus
+        cache = self._init.cache
+        if disc is None or cache is None:
+            return
+
+        make = self._init.manufacturer_name
+        vin_prefix = self._init.vin[:8] if self._init.vin else ""
+
+        for addr, ecu_info in sorted(disc.found.items()):
+            if addr == 0x7E0:
+                continue
+            label = ecu_info.label or f"ECU {addr:03X}"
+            self._uds_label = f"{label} {addr:03X}"
+            self._uds_start = monotonic()
+            self._uds_responding = 0
+
+            fallback = f"vin:{vin_prefix}" if vin_prefix else f"addr:{addr:03X}"
+            secondary = UdsDiscovery(
+                self._connection, cache,
+                ecu_version=fallback,
+                make=make,
+                ecu_addr=addr,
+            )
+            try:
+                version = await secondary.read_ecu_version()
+                if version:
+                    secondary.ecu_version = version
+                await secondary.run_priority1(self._on_uds_progress)
+                self._uds_start = monotonic()
+                self._uds_responding = 0
+                await secondary.run_priority2_background(self._on_uds_progress)
+            except Exception as exc:
+                log.warning("UDS sweep for ECU 0x%03X failed: %s", addr, exc)
+
+        # Restore ATSH to ECM after secondary sweeps leave it at the last ECU's address.
+        try:
+            await self._connection.send_at("ATSH 7E0")
+        except Exception as exc:
+            log.warning("ATSH 7E0 restore after secondary ECU sweep failed: %s", exc)
 
     def _on_uds_done(self, task: asyncio.Task[None]) -> None:
         if task.cancelled():

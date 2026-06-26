@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from Hudson.core.kwp2000 import KwpBlock, KwpField, KwpSession
-from tests.fixtures.fake_connection import FakeConnection, FakeVolvoConnection
+from tests.fixtures.fake_connection import FakeConnection, FakeKlineConnection, FakeVolvoConnection
 
 # Generic test payloads — no manufacturer semantics attached.
 _PAYLOAD_A = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06])
@@ -153,15 +153,15 @@ def test_parse_empty_data_all_fields_none() -> None:
 # ── Real-hardware path (via FakeConnection) ───────────────────────────────────
 
 async def test_real_path_sends_atsp3() -> None:
-    conn = FakeConnection()
+    conn = FakeKlineConnection()
     session = KwpSession(conn, mock_responses=None)
-    # FakeConnection.query_kwp_service returns None → session fails to start
+    # FakeKlineConnection.query_kwp_service returns None → session fails to start
     await session.start_diagnostic_session()
     assert "ATSP3" in conn._send_at_history
 
 
 async def test_real_path_restores_atsp0_on_failure() -> None:
-    conn = FakeConnection()
+    conn = FakeKlineConnection()
     session = KwpSession(conn, mock_responses=None)
     started = await session.start_diagnostic_session()
     assert started is False
@@ -185,3 +185,67 @@ async def test_real_path_close_sends_atsp0() -> None:
     await session.close()
     assert "ATSP0" in conn._send_at_history
     assert session._started is False
+
+
+# ── Transport auto-detection and override ─────────────────────────────────────
+
+async def test_autodetect_picks_can_on_can_connection() -> None:
+    """Auto-detect selects CAN transport when connection reports a CAN protocol."""
+    conn = FakeConnection()  # protocol_name contains "CAN"
+    session = KwpSession(conn, mock_responses=None)
+    assert session.transport == "can"
+    await session.start_diagnostic_session()
+    # CAN path: ATSH must be sent, ATSP3 must NOT be sent
+    assert any(h.startswith("ATSH") for h in conn._send_at_history)
+    assert "ATSP3" not in conn._send_at_history
+
+
+async def test_autodetect_picks_kline_on_kline_connection() -> None:
+    """Auto-detect selects K-line transport when connection reports a K-line protocol."""
+    conn = FakeKlineConnection()
+    session = KwpSession(conn, mock_responses=None)
+    assert session.transport == "kline"
+    await session.start_diagnostic_session()
+    assert "ATSP3" in conn._send_at_history
+
+
+async def test_explicit_kline_override_on_can_connection() -> None:
+    """Explicit transport='kline' overrides auto-detect even on a CAN-reporting connection."""
+    conn = FakeConnection()  # would auto-detect as CAN
+    session = KwpSession(conn, transport="kline", mock_responses=None)
+    assert session.transport == "kline"
+    await session.start_diagnostic_session()
+    assert "ATSP3" in conn._send_at_history
+    assert not any(h.startswith("ATSH") for h in conn._send_at_history)
+
+
+async def test_can_close_reasserts_atsh_before_stop() -> None:
+    """close() must re-set ATSH to the session ECU before sending 0x20.
+
+    Intervening code (e.g. the UDS DTC scanner) can change ATSH between
+    start and close.  Without the re-assert, StopDiagnosticSession goes to
+    the wrong ECU.
+    """
+
+    class _CanKwpConnection(FakeConnection):
+        """Returns positive for StartDiagnosticSession (0x10) so _started=True."""
+        async def query_kwp_service(self, service: int, payload: bytes = b"", timeout: float = 0.15) -> bytes | None:
+            await asyncio.sleep(0.01)
+            return b"" if service == 0x10 else None
+
+    import asyncio
+    conn = _CanKwpConnection()
+    session = KwpSession(conn, transport="can", ecu_addr=0x7E2, mock_responses=None)
+    started = await session.start_diagnostic_session()
+    assert started is True
+
+    # Simulate intervening ATSH change (e.g. UDS scanner restoring to 7E0)
+    conn._send_at_history.clear()
+    await conn.send_at("ATSH 7E0")
+
+    await session.close()
+
+    # ATSH 7E2 must appear and must be the last ATSH set (after the intervening 7E0)
+    atsh_calls = [h for h in conn._send_at_history if h.startswith("ATSH")]
+    assert atsh_calls, "expected at least one ATSH call during close()"
+    assert atsh_calls[-1] == "ATSH 7E2"

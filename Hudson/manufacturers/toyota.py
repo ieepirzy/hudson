@@ -126,10 +126,10 @@ async def read_enhanced_pid(connection: ObdConnection, pid_key: str) -> float | 
     pid = ENHANCED_PIDS.get(pid_key)
     if pid is None:
         return None
-    data = await connection.query_uds(0x22, pid.identifier)
-    if data is None or len(data) < pid.byte_count:
+    response = await connection.query_uds_at_addr(0x7E0, pid.identifier)
+    if len(response.data) < pid.byte_count:
         return None
-    return pid.decode(data)
+    return pid.decode(response.data)
 
 
 async def read_enhanced_block(
