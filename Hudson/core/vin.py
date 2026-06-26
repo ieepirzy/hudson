@@ -110,7 +110,9 @@ async def _try_mode09(connection: ObdConnection) -> str | None:
         # It does NOT change the active protocol — we stay on whatever CAN
         # variant python-obd negotiated during connect.
         await connection.send_at("ATD")
-        response = await connection.query(obd.commands.VIN)
+        # force=True: some ECUs omit VIN from the mode-09 PID bitmap but still
+        # respond correctly when queried directly.
+        response = await connection.query(obd.commands.VIN, force=True)
         if response.is_null() or response.value is None:
             log.info("VIN chain [1/5]: mode 09 → null (ECU did not respond)")
             return None
@@ -225,11 +227,25 @@ async def resolve_vin_chain(connection: ObdConnection) -> str | None:
     """Speculatively try every VIN protocol in sequence; return the first hit.
 
     Returns the VIN string (17 alphanumeric chars) on success, or None if all
-    five attempts fail. Each attempt sets up its own ELM327 adapter state from
-    scratch before sending, so a failed or corrupted prior attempt cannot
+    applicable attempts fail. Each attempt sets up its own ELM327 adapter state
+    from scratch before sending, so a failed or corrupted prior attempt cannot
     poison the next one.
+
+    KWP2000 steps (3–5) require K-line transport. They are skipped when the
+    negotiated protocol is CAN — switching to ATSP3 on a CAN adapter causes
+    the ELM327 to attempt K-line fast init and hang until its internal timeout
+    fires.
     """
     log.info("VIN resolution chain: starting")
+
+    proto = connection.protocol_name.lower()
+    _is_kline = any(kw in proto for kw in ("9141", "14230", "kwp"))
+    _is_can = bool(proto) and not _is_kline
+    if _is_can:
+        log.info(
+            "VIN chain: CAN protocol detected (%s) — skipping K-line steps 3–5",
+            connection.protocol_name,
+        )
 
     vin = await _try_mode09(connection)
     if vin:
@@ -239,17 +255,18 @@ async def resolve_vin_chain(connection: ObdConnection) -> str | None:
     if vin:
         return vin
 
-    vin = await _try_kwp_1a(connection, "3/5", addr=0x17, param=0x90)
-    if vin:
-        return vin
+    if not _is_can:
+        vin = await _try_kwp_1a(connection, "3/5", addr=0x17, param=0x90)
+        if vin:
+            return vin
 
-    vin = await _try_kwp_1a(connection, "4/5", addr=0x19, param=0x90)
-    if vin:
-        return vin
+        vin = await _try_kwp_1a(connection, "4/5", addr=0x19, param=0x90)
+        if vin:
+            return vin
 
-    vin = await _try_kwp_1a(connection, "5/5", addr=0x17, param=0x86)
-    if vin:
-        return vin
+        vin = await _try_kwp_1a(connection, "5/5", addr=0x17, param=0x86)
+        if vin:
+            return vin
 
     log.warning("VIN resolution chain: all protocols exhausted — no VIN found")
     return None

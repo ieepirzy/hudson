@@ -14,7 +14,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Label, Static
+from textual.widgets import Button, DataTable, Static
 
 from ...core.connection import ObdConnection
 from ...core.dtc import DtcRecord, decode_dtc_list
@@ -75,7 +75,7 @@ class ClearDtcConfirmScreen(ModalScreen[bool]):
     }
 
     #confirm-dialog {
-        width: 52;
+        width: 70%;
         height: auto;
         border: round $warning;
         background: $surface;
@@ -133,6 +133,73 @@ class ClearDtcConfirmScreen(ModalScreen[bool]):
         self.dismiss(event.button.id == "btn-confirm")
 
 
+class LastClearStats(Static):
+    """Sidebar box — ECU metrics since the last DTC clear + codes cleared this session."""
+
+    DEFAULT_CSS = """
+    LastClearStats {
+        border: round $primary 40%;
+        height: auto;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self._dist: float | None = None
+        self._warmups: int | None = None
+        self._mil_dist: float | None = None
+        self._mil_time: float | None = None
+        self._cleared_codes: list[str] = []
+        self._refresh_display()
+
+    def set_ecu_metrics(
+        self,
+        dist: float | None,
+        warmups: int | None,
+        mil_dist: float | None,
+        mil_time: float | None,
+    ) -> None:
+        self._dist = dist
+        self._warmups = warmups
+        self._mil_dist = mil_dist
+        self._mil_time = mil_time
+        self._refresh_display()
+
+    def set_cleared_codes(self, codes: list[str]) -> None:
+        self._cleared_codes = codes
+        self._refresh_display()
+
+    def _refresh_display(self) -> None:
+        def fmt_km(v: float | None) -> str:
+            return f"{v:.0f} km" if v is not None else "—"
+
+        def fmt_int(v: int | None) -> str:
+            return str(v) if v is not None else "—"
+
+        def fmt_min(v: float | None) -> str:
+            if v is None:
+                return "—"
+            h, m = divmod(int(v), 60)
+            return f"{h}h {m}m" if h else f"{m} min"
+
+        dist_color = "limegreen" if (self._dist is not None and self._dist == 0) else "white"
+
+        codes_line = ""
+        if self._cleared_codes:
+            codes_line = "\n[dim]Cleared[/]   [gold]" + "  ".join(self._cleared_codes) + "[/]"
+
+        self.update(
+            f"[bold dim]SINCE LAST CLEAR[/]\n"
+            f"[dim]Distance[/]  [{dist_color}]{fmt_km(self._dist)}[/]\n"
+            f"[dim]Warm-ups[/]  [white]{fmt_int(self._warmups)}[/]\n"
+            f"[dim]MIL dist[/]  [white]{fmt_km(self._mil_dist)}[/]\n"
+            f"[dim]MIL time[/]  [white]{fmt_min(self._mil_time)}[/]"
+            f"{codes_line}"
+        )
+
+
 class DtcPane(Widget):
     """Scan for DTCs and display them in a table."""
 
@@ -153,10 +220,21 @@ class DtcPane(Widget):
         color: $text-muted;
     }
 
-    #dtc-table {
+    #dtc-main {
         height: 1fr;
+        layout: horizontal;
+    }
+
+    #dtc-table {
+        width: 2fr;
         border: round $primary 50%;
-        margin: 1;
+        margin: 1 0 1 1;
+    }
+
+    #dtc-sidebar {
+        width: 26;
+        padding: 1 1 1 0;
+        layout: vertical;
     }
     """
 
@@ -175,8 +253,11 @@ class DtcPane(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static(" Press r to scan for DTCs", id="dtc-status")
-        table: DataTable[str] = DataTable(id="dtc-table", zebra_stripes=True)
-        yield table
+        with Horizontal(id="dtc-main"):
+            table: DataTable[str] = DataTable(id="dtc-table", zebra_stripes=True)
+            yield table
+            with Vertical(id="dtc-sidebar"):
+                yield LastClearStats()
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
@@ -201,10 +282,25 @@ class DtcPane(Widget):
         confirmed = await self.app.push_screen_wait(ClearDtcConfirmScreen())
         if not confirmed:
             return
+
+        # Snapshot current codes before erasing so we can show what was cleared.
+        table = self.query_one(DataTable)
+        codes_before: list[str] = []
+        for row_key in table.rows:
+            try:
+                code_cell = table.get_cell(row_key, "code")
+                status_cell = table.get_cell(row_key, "status")
+                if status_cell in ("Stored", "Pending"):
+                    codes_before.append(str(code_cell))
+            except Exception:
+                pass
+
         self.query_one("#dtc-status", Static).update(" Clearing stored DTCs (mode 04)...")
         try:
             await self._connection.query(obd.commands.CLEAR_DTC, force=True)
-            self.query_one(DataTable).clear()
+            table.clear()
+            if codes_before:
+                self.query_one(LastClearStats).set_cleared_codes(codes_before)
             self.query_one("#dtc-status", Static).update(
                 " Stored DTCs cleared. Permanent codes require a completed repair."
                 "  Press r to rescan."
@@ -272,14 +368,13 @@ class DtcPane(Widget):
         stored_codes: list[str] = []
         pending_codes: list[str] = []
         permanent_codes: list[str] = []
-        # (row_key, code) pairs for dtcdecode update pass
         row_entries: list[tuple[str, str]] = []
 
-        # Mode 03 — stored DTCs (python-obd returns list of (code_str, desc_str))
+        # Mode 03 — stored DTCs
         try:
             resp = await self._connection.query(obd.commands.GET_DTC, force=True)
             if resp.is_null() or resp.value is None:
-                status_parts.append("Stored: ECU did not respond")
+                status_parts.append("Stored: ECU no response")
             elif not resp.value:
                 status_parts.append("Stored: none")
             else:
@@ -294,7 +389,7 @@ class DtcPane(Widget):
             log.exception("Mode 03 scan failed")
             status_parts.append(f"Stored: error — {exc}")
 
-        # Mode 07 — pending DTCs (custom command, raw bytes → decode_dtc_list)
+        # Mode 07 — pending DTCs
         try:
             resp = await self._connection.query(GET_PENDING_DTC, force=True)
             if resp.is_null() or resp.value is None:
@@ -315,7 +410,7 @@ class DtcPane(Widget):
             log.exception("Mode 07 scan failed")
             status_parts.append(f"Pending: error — {exc}")
 
-        # Mode 0A — permanent DTCs (custom command, raw bytes → decode_dtc_list)
+        # Mode 0A — permanent DTCs
         try:
             resp = await self._connection.query(GET_PERMANENT_DTC, force=True)
             if resp.is_null() or resp.value is None:
@@ -399,10 +494,29 @@ class DtcPane(Widget):
                 f" {total} code(s) found.  {summary}  |  r=refresh  c=clear stored"
             )
 
-        # Fetch dtcdecode.com 2nd opinions concurrently for all found codes.
         make = self._init.dtcdecode_make
         if make and row_entries:
             await self._fetch_second_opinions(table, make, row_entries)
+
+    async def _refresh_clear_stats(self) -> None:
+        """Query ECU metrics about the last DTC clear and update the sidebar."""
+
+        async def _query_float(cmd: OBDCommand) -> float | None:
+            try:
+                r = await self._connection.query(cmd)
+                if not r.is_null() and r.value is not None:
+                    return float(r.value.magnitude)
+            except Exception:
+                pass
+            return None
+
+        dist = await _query_float(obd.commands.DISTANCE_SINCE_DTC_CLEAR)
+        warmups_raw = await _query_float(obd.commands.WARMUPS_SINCE_DTC_CLEAR)
+        mil_dist = await _query_float(obd.commands.DISTANCE_W_MIL)
+        mil_time = await _query_float(obd.commands.RUN_TIME_MIL)
+
+        warmups = int(warmups_raw) if warmups_raw is not None else None
+        self.query_one(LastClearStats).set_ecu_metrics(dist, warmups, mil_dist, mil_time)
 
     async def _fetch_second_opinions(
         self,

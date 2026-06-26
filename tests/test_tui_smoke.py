@@ -19,7 +19,18 @@ import asyncio
 import pytest
 
 from Hudson.tui.app import HudsonApp
+from Hudson.tui.screens.splash import MakeSelectScreen
 from tests.fixtures.fake_connection import FakeConnection
+
+
+async def _wait_past_splash(pilot) -> None:
+    """Wait for init to complete (~2s UDS mock sweep) then dismiss the make-select modal."""
+    # UDS mock sweep: (1024 / 32) * 0.065 ≈ 2.08 s; add slack for connect + other steps.
+    await pilot.pause(3.0)
+    # Dismiss make-select modal if shown (FakeConnection has no auto-detected make).
+    if isinstance(pilot.app.screen, MakeSelectScreen):
+        await pilot.press("escape")
+        await pilot.pause(0.3)
 
 
 @pytest.mark.asyncio
@@ -29,15 +40,8 @@ async def test_splash_to_dashboard_smoke() -> None:
     app = HudsonApp(fake)  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        # Allow the splash to complete the init sequence.
-        # (Connect 0.1s + 6 fake queries × 0.02s + small slack)
-        await pilot.pause(1.0)
+        await _wait_past_splash(pilot)
 
-        # Pump the event loop a bit for any pending coroutines.
-        for _ in range(5):
-            await pilot.pause(0.1)
-
-        # After init, MainScreen should be on top.
         from Hudson.tui.screens.main import MainScreen
 
         active = app.screen
@@ -45,7 +49,6 @@ async def test_splash_to_dashboard_smoke() -> None:
             f"expected MainScreen, got {type(active).__name__}"
         )
 
-        # Header strip should be populated with the fake VIN and manufacturer.
         info_widget = active.query_one("#header-strip")
         rendered = str(info_widget.render())
         assert "WV2ZZZ7HZ8H123456" in rendered, f"VIN not in header strip: {rendered!r}"
@@ -62,9 +65,7 @@ async def test_right_arrow_switches_to_dtc_tab() -> None:
     app = HudsonApp(fake)  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        await pilot.pause(1.0)
-        for _ in range(5):
-            await pilot.pause(0.1)
+        await _wait_past_splash(pilot)
 
         assert isinstance(app.screen, MainScreen)
 
@@ -84,22 +85,16 @@ async def test_tab_index_wraps_after_full_cycle() -> None:
     app = HudsonApp(fake)  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        await pilot.pause(1.0)
-        for _ in range(5):
-            await pilot.pause(0.1)
+        await _wait_past_splash(pilot)
 
         assert isinstance(app.screen, MainScreen)
 
-        # Press right once for each tab; state should wrap back to index 0.
-        # We check _active_idx (internal counter) rather than ContentSwitcher.current
-        # to avoid triggering a Dashboard re-show that races with the gauge worker.
-        for _ in range(len(TABS) - 1):   # go to last tab (index 3 = Vehicle)
+        for _ in range(len(TABS) - 1):
             await pilot.press("right")
             await pilot.pause(0.05)
 
-        assert app.screen._active_idx == len(TABS) - 1  # on Vehicle
+        assert app.screen._active_idx == len(TABS) - 1
 
-        # One more press wraps to index 0
         await pilot.press("right")
         await pilot.pause(0.05)
         assert app.screen._active_idx == 0
@@ -115,13 +110,11 @@ async def test_vehicle_tab_is_reachable() -> None:
     app = HudsonApp(fake)  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        await pilot.pause(1.0)
-        for _ in range(5):
-            await pilot.pause(0.1)
+        await _wait_past_splash(pilot)
 
         assert isinstance(app.screen, MainScreen)
 
-        for _ in range(3):   # Dashboard → DTCs → Log → Vehicle
+        for _ in range(3):
             await pilot.press("right")
             await pilot.pause(0.05)
 
@@ -139,9 +132,7 @@ async def test_left_arrow_wraps_to_last_tab() -> None:
     app = HudsonApp(fake)  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        await pilot.pause(1.0)
-        for _ in range(5):
-            await pilot.pause(0.1)
+        await _wait_past_splash(pilot)
 
         assert isinstance(app.screen, MainScreen)
 

@@ -41,12 +41,12 @@ def _uds_passthrough(messages: list) -> bytes | None:
 class ConnectionConfig:
     """Settings for opening an ELM327 connection."""
 
-    portstr: str | None = None  # e.g. "/dev/rfcomm0"; None = auto-detect
+    portstr: str | None = None  # None = auto-detect (e.g. /dev/rfcomm0)
     baudrate: int | None = None  # None = auto-detect
     protocol: str | None = None  # None = auto-detect; "6" = ISO 15765-4 (CAN 11/500)
     fast: bool = True  # python-obd's "fast" mode reuses the last response if cached
     timeout: float = 0.1
-    check_voltage: bool = True
+    check_voltage: bool = False
 
 
 _VOLTAGE_RE = re.compile(r"^\d+\.?\d*\s*[Vv]?$")
@@ -457,8 +457,11 @@ class ObdConnection:
                 log.warning("send_at(%r): no ELM327 interface available", cmd)
                 return ""
             try:
-                msgs = iface.send_and_parse(cmd)
-                return "".join(str(m) for m in msgs) if msgs else ""
+                # send_and_parse routes through the OBD protocol parser — wrong for AT
+                # commands which return plain text ("OK", version strings, voltages).
+                # Use the private __send to get raw response lines instead.
+                lines = iface._ELM327__send(cmd)
+                return "\n".join(lines) if lines else ""
             except Exception as exc:
                 log.warning("AT command %r failed: %s", cmd, exc)
                 return ""
