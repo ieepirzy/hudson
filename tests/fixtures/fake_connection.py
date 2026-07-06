@@ -21,6 +21,7 @@ from Hudson.core.connection import (
     UdsResponseStatus,
     _atst_for,
 )
+from Hudson.core.dtc import encode_dtc
 
 if TYPE_CHECKING:
     from obd import OBDCommand
@@ -54,6 +55,8 @@ class FakeConnection:
         *,
         functional_responders: list[int] | None = None,
         present_ecus: set[int] | None = None,
+        pending_dtcs: list[str] | None = None,
+        permanent_dtcs: list[str] | None = None,
     ) -> None:
         self._vin = vin
         self._connected = False
@@ -68,6 +71,9 @@ class FakeConnection:
         self._present_ecus: set[int] = (
             set(present_ecus) if present_ecus is not None else {0x7E0}
         )
+        # Mode 07 (pending) and 0A (permanent) DTC simulation.
+        self._pending_dtcs: list[str] = list(pending_dtcs) if pending_dtcs is not None else []
+        self._permanent_dtcs: list[str] = list(permanent_dtcs) if permanent_dtcs is not None else []
         self._supported = {
             obd.commands.RPM,
             obd.commands.SPEED,
@@ -126,6 +132,13 @@ class FakeConnection:
         if cmd is obd.commands.CLEAR_DTC:
             self._dtcs = list(self._INITIAL_DTCS)
             return _make_response(cmd, [])
+
+        # Mode 07 (pending) and 0A (permanent) — custom OBDCommand instances,
+        # detected by command byte since they are not in the obd.commands namespace.
+        if cmd.command == b"\x07":
+            return _make_response(cmd, _encode_dtc_payload(self._pending_dtcs))
+        if cmd.command == b"\x0A":
+            return _make_response(cmd, _encode_dtc_payload(self._permanent_dtcs))
 
         t = monotonic() - self._t0
         value = _synthetic_value(cmd, t)
@@ -333,6 +346,15 @@ class FakeToyotaConnection(FakeConnection):
     async def query_enhanced_local(self, local_id: int, timeout: float = 0.15) -> bytes | None:
         await asyncio.sleep(0.01)
         return _MOCK_TOYOTA_ENHANCED_LOCAL.get(local_id)
+
+
+def _encode_dtc_payload(codes: list[str]) -> bytes:
+    """Encode DTC code strings to raw 2-byte pairs for mode 07/0A simulation."""
+    result = b""
+    for code in codes:
+        a, b = encode_dtc(code)
+        result += bytes([a, b])
+    return result
 
 
 def _synthetic_value(cmd: OBDCommand, t: float) -> object:

@@ -384,7 +384,7 @@ class ObdConnection:
         async with self._lock:
             raw = await asyncio.to_thread(_atomic)
 
-        if raw is None:
+        if not raw:
             return UdsResponse(UdsResponseStatus.NO_RESPONSE)
         if raw[0] == 0x7F and len(raw) >= 3:
             nrc = raw[2]

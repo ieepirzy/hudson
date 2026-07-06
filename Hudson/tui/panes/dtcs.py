@@ -31,13 +31,16 @@ if TYPE_CHECKING:
 def _raw_dtc_decoder(messages: list) -> bytes:
     """Passthrough decoder for mode 07/0A responses.
 
-    Strips the response service byte (mode + 0x40) and returns the raw
-    DTC payload bytes for decode_dtc_list().
+    Strips the service echo byte (mode + 0x40) and DTC count byte from each
+    message, then concatenates the DTC pairs. Mode 07/0A use a functional
+    broadcast (0x7DF) so multiple ECUs may respond as separate Message objects.
     """
-    if not messages:
-        return b""
-    data = bytes(messages[0].data)
-    return data[1:] if len(data) > 1 else b""
+    result = b""
+    for msg in messages:
+        data = bytes(msg.data)
+        if len(data) > 2:
+            result += data[2:]
+    return result
 
 
 GET_PENDING_DTC = OBDCommand(
