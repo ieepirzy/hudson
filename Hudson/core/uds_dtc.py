@@ -216,11 +216,15 @@ async def discover_ecus_functional(connection: ObdConnection) -> list[int]:
         log.warning("Tier A: ATAT 0 failed: %s — continuing", exc)
 
     try:
-        ids = await connection.query_functional_mode01(pid=0x00)
+        raw_ids = await connection.query_functional_mode01(pid=0x00)
+        # raw_ids are response CAN IDs (e.g. 0x7E8 from ECM at 0x7E0).
+        # Convert to physical request addresses so ATSH commands work correctly.
+        ids = [a - 8 if 0x7E8 <= a <= 0x7EF else a for a in raw_ids]
         log.info(
-            "Tier A: functional broadcast → %d responder(s): %s",
+            "Tier A: functional broadcast → %d responder(s): %s (raw: %s)",
             len(ids),
             [f"0x{a:03X}" for a in ids],
+            [f"0x{a:03X}" for a in raw_ids],
         )
         return ids
     except Exception as exc:

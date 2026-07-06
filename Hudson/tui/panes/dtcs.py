@@ -439,7 +439,13 @@ class DtcPane(Widget):
                 # set includes proprietary addresses (e.g. Ford BCM 0x733, ABS 0x726)
                 # that the standard J1979 sweep would miss.
                 _disc = self._init.discovered_ecus
-                _addrs = list(_disc.found.keys()) if _disc and _disc.found else None
+                if _disc and _disc.found:
+                    # Always probe ECM (0x7E0) and TCM (0x7E1) directly — they are
+                    # mandatory OBD2 addresses and may not have responded during
+                    # discovery (e.g. Tier A broadcast only found them by response ID).
+                    _addrs = sorted({0x7E0, 0x7E1} | set(_disc.found.keys()))
+                else:
+                    _addrs = None
                 uds_results = await scan_ecus_for_dtcs(
                     self._connection, sub_fn=0x02, addresses=_addrs
                 )

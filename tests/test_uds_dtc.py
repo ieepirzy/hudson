@@ -169,13 +169,14 @@ async def test_functional_empty_when_no_responders() -> None:
 
 @pytest.mark.asyncio
 async def test_functional_returns_all_responding_ids() -> None:
-    """Multiple responders are all captured with correct physical IDs."""
+    """Response CAN IDs are converted to physical request addresses (response − 8)."""
     conn = FakeConnection(functional_responders=[0x7E8, 0x7E9])
     await conn.connect()
 
     result = await discover_ecus_functional(conn)
 
-    assert sorted(result) == [0x7E8, 0x7E9]
+    # 0x7E8 → 0x7E0 (ECM request addr), 0x7E9 → 0x7E1 (TCM request addr)
+    assert sorted(result) == [0x7E0, 0x7E1]
 
 
 @pytest.mark.asyncio
@@ -400,15 +401,33 @@ async def test_orchestrator_tier_a_always_runs() -> None:
 
     result = await discover_ecus(conn, make="Ford")
 
-    assert 0x7E8 in result.found
-    assert result.found[0x7E8].tier == DiscoveryTier.A
+    # 0x7E8 (response ID) is converted to 0x7E0 (ECM request address).
+    assert 0x7E0 in result.found
+    assert result.found[0x7E0].tier == DiscoveryTier.A
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_tier_tags_correctly() -> None:
     """Each found address is tagged with the tier that first discovered it."""
-    # 0x7E8: Tier A hit (functional broadcast)
-    # 0x7E0: Tier B hit (in Ford table + responds)
+    # 0x7E9 → converted to TCM request address 0x7E1 (Tier A)
+    # 0x7E0: Tier B hit (in Ford table + responds to TesterPresent)
+    conn = FakeConnection(
+        functional_responders=[0x7E9],
+        present_ecus={0x7E0},
+    )
+    await conn.connect()
+
+    result = await discover_ecus(conn, make="Ford")
+
+    assert result.found[0x7E1].tier == DiscoveryTier.A
+    assert result.found[0x7E0].tier == DiscoveryTier.B
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_tier_a_hit_not_overwritten_by_tier_b() -> None:
+    """If Tier A already found an address, Tier B must not overwrite its tier tag."""
+    # ECM (0x7E0) responds to functional broadcast as 0x7E8 (response CAN ID).
+    # After conversion, 0x7E0 is in found before Tier B probes it.
     conn = FakeConnection(
         functional_responders=[0x7E8],
         present_ecus={0x7E0},
@@ -417,23 +436,7 @@ async def test_orchestrator_tier_tags_correctly() -> None:
 
     result = await discover_ecus(conn, make="Ford")
 
-    assert result.found[0x7E8].tier == DiscoveryTier.A
-    assert result.found[0x7E0].tier == DiscoveryTier.B
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_tier_a_hit_not_overwritten_by_tier_b() -> None:
-    """If Tier A already found an address, Tier B must not overwrite its tier tag."""
-    # 0x7E0 is in the Ford table AND responds to functional broadcast.
-    conn = FakeConnection(
-        functional_responders=[0x7E0],
-        present_ecus={0x7E0},
-    )
-    await conn.connect()
-
-    result = await discover_ecus(conn, make="Ford")
-
-    # Tier A found it first — must keep DiscoveryTier.A tag.
+    # Tier A found ECM first (0x7E8 → 0x7E0) — Tier B must not overwrite its tag.
     assert result.found[0x7E0].tier == DiscoveryTier.A
 
 
