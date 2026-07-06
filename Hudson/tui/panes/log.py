@@ -8,6 +8,13 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import RichLog
 
+_warn_error_count: int = 0
+
+
+def get_warn_error_count() -> int:
+    return _warn_error_count
+
+
 _LEVEL_MARKUP: dict[int, tuple[str, str]] = {
     logging.DEBUG:    ("[dim]",          "[/dim]"),
     logging.INFO:     ("",               ""),
@@ -28,6 +35,9 @@ class _RichLogHandler(logging.Handler):
         self.setFormatter(_FMT)
 
     def emit(self, record: logging.LogRecord) -> None:
+        global _warn_error_count
+        if record.levelno >= logging.WARNING:
+            _warn_error_count += 1
         try:
             text = self.format(record)
             open_tag, close_tag = _LEVEL_MARKUP.get(record.levelno, ("", ""))

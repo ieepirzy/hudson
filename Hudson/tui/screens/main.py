@@ -41,25 +41,46 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_SCAN_BAR_WIDTH = 16
+_SCAN_BAR_WIDTH = 14
 _PROGRESS_UPDATE_INTERVAL = 50  # update UI every N identifiers to avoid flooding
 
 
-class UdsScanStrip(Static):
-    """One-line footer showing UDS priority-2 background scan progress and ETA."""
+class StatusBar(Static):
+    """Persistent one-line footer: protocol · transport | active ECU | scan | warnings."""
 
     DEFAULT_CSS = """
-    UdsScanStrip {
+    StatusBar {
         height: 1;
         background: $surface-darken-2;
         color: $text-muted;
         padding: 0 1;
-        display: none;
-    }
-    UdsScanStrip.--active {
-        display: block;
     }
     """
+
+    def __init__(
+        self,
+        connection: ObdConnection,
+        init_result: InitResult,
+        *,
+        id: str | None = None,
+    ) -> None:
+        super().__init__("", id=id)
+        self._connection = connection
+        self._proto = init_result.protocol_name or "—"
+        self._transport = getattr(connection, "transport_label", "")
+        self._scanning = False
+        self._scan_label = ""
+        self._scan_current = 0
+        self._scan_total = 0
+        self._scan_responding = 0
+        self._scan_elapsed = 0.0
+        self._scan_done = False
+        self._scan_done_responding = 0
+
+    def on_mount(self) -> None:
+        self.set_interval(0.5, self._refresh_display)
+
+    # ── scan state setters (called by MainScreen) ─────────────────────────────
 
     def show_scanning(
         self,
@@ -69,24 +90,86 @@ class UdsScanStrip(Static):
         elapsed: float,
         label: str = "",
     ) -> None:
-        self.add_class("--active")
-        rate = current / elapsed if elapsed > 0 else 1.0
-        eta_s = (total - current) / rate if rate > 0 else 0.0
-        if eta_s < 60:
-            eta = f"{int(eta_s)}s"
-        elif eta_s < 3600:
-            eta = f"{int(eta_s / 60)}m"
-        else:
-            eta = f"{int(eta_s / 3600)}h{int((eta_s % 3600) / 60):02d}m"
-        pct = int(current / total * 100)
-        filled = round(current / total * _SCAN_BAR_WIDTH)
-        bar = f"[{'█' * filled}{'░' * (_SCAN_BAR_WIDTH - filled)}]"
-        label_part = f"  {label}" if label else ""
-        self.update(f" UDS scan{label_part}  {bar}  {pct:3d}%   ETA {eta}   {responding} found")
+        self._scanning = True
+        self._scan_done = False
+        self._scan_label = label
+        self._scan_current = current
+        self._scan_total = total
+        self._scan_responding = responding
+        self._scan_elapsed = elapsed
+        self._refresh_display()
+
+    def show_scan_phase(self, phase: str) -> None:
+        """Text-only phase label, no progress bar — e.g. 'DTC Mode 03'."""
+        self._scanning = True
+        self._scan_done = False
+        self._scan_label = phase
+        self._scan_total = 0
+        self._refresh_display()
 
     def show_complete(self, responding: int) -> None:
-        self.add_class("--active")
-        self.update(f" UDS scan  complete ✓   {responding} identifiers found")
+        self._scanning = False
+        self._scan_done = True
+        self._scan_done_responding = responding
+        self._refresh_display()
+        self.set_timer(12.0, self.hide_scan)
+
+    def hide_scan(self) -> None:
+        self._scanning = False
+        self._scan_done = False
+        self._refresh_display()
+
+    # ── rendering ─────────────────────────────────────────────────────────────
+
+    def _refresh_display(self) -> None:
+        from Hudson.tui.panes.log import get_warn_error_count
+
+        # Protocol / transport
+        transport = self._transport or getattr(self._connection, "transport_label", "")
+        proto_part = self._proto
+        if transport:
+            proto_part += f" · {transport}"
+
+        # Active ECU
+        ecu_addr = getattr(self._connection, "active_ecu_addr", None)
+        ecu_part = f"ECU {ecu_addr:03X}" if ecu_addr is not None else "ECU —"
+
+        # Scan progress
+        if self._scanning and self._scan_total > 0:
+            pct = int(self._scan_current / self._scan_total * 100)
+            filled = round(self._scan_current / self._scan_total * _SCAN_BAR_WIDTH)
+            bar = "█" * filled + "░" * (_SCAN_BAR_WIDTH - filled)
+            rate = self._scan_current / self._scan_elapsed if self._scan_elapsed > 0 else 1.0
+            eta_s = (self._scan_total - self._scan_current) / rate if rate > 0 else 0.0
+            if eta_s < 60:
+                eta = f"{int(eta_s)}s"
+            elif eta_s < 3600:
+                eta = f"{int(eta_s / 60)}m"
+            else:
+                eta = f"{int(eta_s / 3600)}h{int((eta_s % 3600) / 60):02d}m"
+            scan_part = f"⟳ {self._scan_label}  \\[{bar}]  {pct}%  ETA {eta}  {self._scan_responding} found"
+        elif self._scanning:
+            scan_part = f"⟳ {self._scan_label}"
+        elif self._scan_done:
+            scan_part = f"✓ scan  {self._scan_done_responding} found"
+        else:
+            scan_part = ""
+
+        # Warning / error count
+        err = get_warn_error_count()
+        err_part = f"⚠ {err}" if err > 0 else ""
+
+        # Assemble line with dim separators
+        line = f"[dim]{proto_part}[/]  [white]│[/]  {ecu_part}"
+        if scan_part:
+            line += f"  [white]│[/]  [cyan]{scan_part}[/]"
+        if err_part:
+            line += f"  [white]│[/]  [red]{err_part}[/]"
+
+        try:
+            self.update(line)
+        except Exception:
+            pass
 
 
 TABS: list[tuple[str, str]] = [
@@ -192,11 +275,15 @@ class MainScreen(Screen[None]):
         self._uds_label = ""
 
     def compose(self) -> ComposeResult:
+        transport = getattr(self._connection, "transport_label", "")
+        proto_display = self._init.protocol_name or "—"
+        if transport:
+            proto_display += f" [{transport}]"
         info = (
             f" HUDSON   "
             f"VIN: {self._init.vin or '—'}   "
             f"{self._init.manufacturer_name}   "
-            f"{self._init.protocol_name or '—'}   "
+            f"{proto_display}   "
             f"PIDs: {len(self._init.supported_commands)}"
         )
         yield Static(info, id="header-strip")
@@ -210,7 +297,7 @@ class MainScreen(Screen[None]):
             yield LogPane(id="log")
             yield VehiclePane(self._init, id="vehicle")
 
-        yield UdsScanStrip(id="uds-strip")
+        yield StatusBar(self._connection, self._init, id="status-bar")
 
     async def on_mount(self) -> None:
         supported_names = {c.name for c in self._init.supported_commands}
@@ -253,11 +340,10 @@ class MainScreen(Screen[None]):
         if current % _PROGRESS_UPDATE_INTERVAL == 0 or current == total:
             elapsed = monotonic() - self._uds_start
             try:
-                self.query_one(UdsScanStrip).show_scanning(
+                self.query_one(StatusBar).show_scanning(
                     current, total, self._uds_responding, elapsed, self._uds_label
                 )
             except Exception:
-                # Widget removed if screen was dismounted mid-sweep; not an error.
                 pass
 
     async def _run_uds_background(self) -> None:
@@ -320,9 +406,19 @@ class MainScreen(Screen[None]):
             log.error("UDS priority-2 background scan failed", exc_info=exc)
             return
         try:
-            self.query_one(UdsScanStrip).show_complete(self._uds_responding)
+            self.query_one(StatusBar).show_complete(self._uds_responding)
         except Exception:
-            log.debug("UDS scan strip update skipped (widget not available)")
+            log.debug("StatusBar update skipped (widget not available)")
+
+    def on_dtc_pane_scan_phase(self, msg: DtcPane.ScanPhase) -> None:
+        try:
+            bar = self.query_one(StatusBar)
+            if msg.phase:
+                bar.show_scan_phase(msg.phase)
+            else:
+                bar.hide_scan()
+        except Exception:
+            pass
 
     def action_next_tab(self) -> None:
         self._active_idx = (self._active_idx + 1) % len(self._tab_ids)

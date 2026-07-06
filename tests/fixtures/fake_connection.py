@@ -99,6 +99,14 @@ class FakeConnection:
     def is_can_protocol(self) -> bool:
         return "CAN" in self.protocol_name
 
+    @property
+    def active_ecu_addr(self) -> int | None:
+        return 0x7E0
+
+    @property
+    def transport_label(self) -> str:
+        return "CAN"
+
     async def supported_commands(self) -> set[OBDCommand]:
         return set(self._supported)
 

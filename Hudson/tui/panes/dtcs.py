@@ -12,6 +12,7 @@ from obd.protocols import ECU
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
@@ -203,6 +204,12 @@ class LastClearStats(Static):
 class DtcPane(Widget):
     """Scan for DTCs and display them in a table."""
 
+    class ScanPhase(Message):
+        """Posted when the DTC scan enters a new phase. Empty phase = done."""
+        def __init__(self, phase: str) -> None:
+            super().__init__()
+            self.phase = phase
+
     BINDINGS = [
         Binding("r", "refresh", "Refresh", show=True),
         Binding("c", "clear_codes", "Clear DTCs", show=True),
@@ -371,6 +378,7 @@ class DtcPane(Widget):
         row_entries: list[tuple[str, str]] = []
 
         # Mode 03 — stored DTCs
+        self.post_message(self.ScanPhase("DTC Mode 03"))
         try:
             resp = await self._connection.query(obd.commands.GET_DTC, force=True)
             if resp.is_null() or resp.value is None:
@@ -390,6 +398,7 @@ class DtcPane(Widget):
             status_parts.append(f"Stored: error — {exc}")
 
         # Mode 07 — pending DTCs
+        self.post_message(self.ScanPhase("DTC Mode 07"))
         try:
             resp = await self._connection.query(GET_PENDING_DTC, force=True)
             if resp.is_null() or resp.value is None:
@@ -411,6 +420,7 @@ class DtcPane(Widget):
             status_parts.append(f"Pending: error — {exc}")
 
         # Mode 0A — permanent DTCs
+        self.post_message(self.ScanPhase("DTC Mode 0A"))
         try:
             resp = await self._connection.query(GET_PERMANENT_DTC, force=True)
             if resp.is_null() or resp.value is None:
@@ -433,6 +443,7 @@ class DtcPane(Widget):
 
         # UDS 0x19 — multi-ECU sweep (CAN only; UDS 0x19 requires ISO-TP framing)
         if self._connection.is_can_protocol:
+            self.post_message(self.ScanPhase("DTC UDS 0x19"))
             try:
                 self.query_one("#dtc-status", Static).update(" Scanning UDS 0x19 (multi-ECU)…")
                 # Use addresses from tiered discovery when available; the discovered
@@ -471,6 +482,7 @@ class DtcPane(Widget):
 
         # KWP 0x18 — if a K-line session is active from init
         if self._init.kwp_session is not None:
+            self.post_message(self.ScanPhase("DTC KWP 0x18"))
             try:
                 kwp_records = await self._init.kwp_session.read_dtcs()
                 if kwp_records:
@@ -488,6 +500,8 @@ class DtcPane(Widget):
             except Exception as exc:
                 log.exception("KWP 0x18 scan failed")
                 status_parts.append(f"KWP: error — {exc}")
+
+        self.post_message(self.ScanPhase(""))  # done
 
         if self._telemetry is not None:
             await self._telemetry.record_dtcs(stored_codes, pending_codes, permanent_codes)

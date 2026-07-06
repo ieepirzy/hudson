@@ -114,6 +114,7 @@ class ObdConnection:
         self._conn: obd.OBD | None = None
         self._lock = asyncio.Lock()
         self._reconnect_lock = asyncio.Lock()
+        self._active_ecu_addr: int | None = None
 
     async def connect(self) -> None:
         """Open the underlying serial connection in a worker thread."""
@@ -451,6 +452,13 @@ class ObdConnection:
         if self._conn is None:
             raise RuntimeError("not connected")
 
+        _upper = cmd.strip().upper().replace(" ", "")
+        if _upper.startswith("ATSH"):
+            try:
+                self._active_ecu_addr = int(_upper[4:], 16)
+            except ValueError:
+                pass
+
         def _send() -> str:
             iface = getattr(self._conn, "interface", getattr(self._conn, "_interface", None))
             if iface is None:
@@ -642,6 +650,10 @@ class ObdConnection:
         return self._conn.protocol_name() if self._conn else ""
 
     @property
+    def active_ecu_addr(self) -> int | None:
+        return self._active_ecu_addr
+
+    @property
     def is_can_protocol(self) -> bool:
         """True only when the active ELM327 protocol is a CAN variant (ISO 15765 / SAE J1939).
 
@@ -649,6 +661,10 @@ class ObdConnection:
         vehicle network.  Always verify this before issuing any CAN-layer request.
         """
         return "CAN" in self.protocol_name
+
+    @property
+    def transport_label(self) -> str:
+        return "CAN" if self.is_can_protocol else "K-line"
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[ObdConnection]:

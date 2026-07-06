@@ -213,7 +213,12 @@ async def run_init(
     else:
         await events.put(InitEvent(InitStep.ECU_VERSION, "not applicable", done=True))
         await events.put(InitEvent(InitStep.UDS_DISCOVERY, "not applicable", done=True))
-        await events.put(InitEvent(InitStep.KWP_SESSION, "not applicable", done=True))
+        kwp_blocks = getattr(result.manufacturer_module, "kwp_blocks", None)
+        if _is_kline and kwp_blocks is not None:
+            # K-line vehicle with manufacturer-defined KWP2000 blocks — attempt session.
+            await _run_kwp_session(connection, events, result)
+        else:
+            await events.put(InitEvent(InitStep.KWP_SESSION, "not applicable", done=True))
 
     # ── 7. Supported PIDs ────────────────────────────────────────────────────
     await events.put(InitEvent(InitStep.SUPPORTED_PIDS, "probing supported PIDs"))

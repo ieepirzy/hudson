@@ -197,6 +197,18 @@ class SocketCanConnection:
     def is_connected(self) -> bool:
         return self._bus is not None
 
+    @property
+    def is_can_protocol(self) -> bool:
+        return True
+
+    @property
+    def active_ecu_addr(self) -> int | None:
+        return self._tx_id
+
+    @property
+    def transport_label(self) -> str:
+        return "CAN"
+
     # ── AT command emulation ──────────────────────────────────────────────────
 
     async def send_at(self, cmd: str) -> str:
