@@ -54,7 +54,7 @@ def _apply_formula(formula: str, raw: bytes) -> float | str | None:
         return raw.decode("ascii", errors="replace").strip("\x00").strip()
 
     # Named byte formulas like (A*256+B)/1280
-    if re.search(r'\b[A-H]\b', formula):
+    if re.search(r'\b[A-Z]\b', formula):
         return _apply_named_byte_formula(formula, raw)
 
     # Build base value
@@ -102,7 +102,7 @@ def _apply_named_byte_formula(formula: str, raw: bytes) -> float | None:
             scope[letter] = 0.0
 
     # Replace letter references in formula (whole word only)
-    py_expr = re.sub(r'\b([A-H])\b', lambda m: str(scope.get(m.group(1), 0.0)), formula)
+    py_expr = re.sub(r'\b([A-Z])\b', lambda m: str(scope.get(m.group(1), 0.0)), formula)
     try:
         return float(eval(py_expr, {"__builtins__": {}}, {}))  # noqa: S307
     except Exception:
