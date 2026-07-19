@@ -32,8 +32,8 @@ and manufacturer-specific DTC descriptions:
 | Toyota / Lexus | JT1–JT8, 4T1, 5TD, … | probe | 2007+ CAN |
 | Volvo | YV1–YV4, 4V1–4V6 | KWP | ISO 14230 |
 | Ford / Lincoln | WF0, 1FA–1FT, 2FA, 3FA, … | UDS | Incl. Transit Duratorq diesel |
-| BMW / MINI | WBA, WBS, WMW | — | WMI registered; module pending |
-| Mercedes-Benz / smart | WDB, WDD, WDF, WME | — | WMI registered; module pending |
+| BMW / MINI | WBA, WBS, WBW, WBY, WMW | UDS | DTC lookup only; extended Mode 22 PIDs pending hardware capture |
+| Mercedes-Benz / smart | WDB, WDC, WDD, WDF, WME, WMX, VSA | UDS | DTC lookup only; extended Mode 22 PIDs pending hardware capture |
 | Generic fallback | any other VIN | probe | Mode 01 only |
 
 Ford support includes a full Duratorq diesel PID set (DPF pressure / soot /
