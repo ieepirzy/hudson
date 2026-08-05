@@ -22,7 +22,6 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 _DATA_DIR = Path(__file__).parent
 
@@ -104,7 +103,8 @@ def _apply_named_byte_formula(formula: str, raw: bytes) -> float | None:
     # Replace letter references in formula (whole word only)
     py_expr = re.sub(r'\b([A-Z])\b', lambda m: str(scope.get(m.group(1), 0.0)), formula)
     try:
-        return float(eval(py_expr, {"__builtins__": {}}, {}))  # noqa: S307
+        # Safe: formula comes only from bundled hudson_data/*.json, never runtime/network input.
+        return float(eval(py_expr, {"__builtins__": {}}, {}))
     except Exception:
         return None
 
