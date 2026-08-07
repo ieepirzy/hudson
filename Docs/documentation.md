@@ -519,16 +519,6 @@ Layout: header line (label + current value + unit), sparkline history graph (las
 
 ---
 
-### `Hudson/hudson_data/labels_loader.py`
-
-JSON-backed UDS identifier label database. Per-manufacturer JSON files map 0x22 identifiers to label, unit, confidence score, notes, and an optional formula string.
-
-**Formula DSL** supports type prefixes (`uint8`, `uint16_be`, `int16_be`, `uint32_be`, `ascii`) and arithmetic suffixes (`/ N`, `* N`, `- N`, `+ N`). Also handles Toyota-style named byte formulas like `(A*256+B)/1280`.
-
-**`get_label_db(manufacturer)`** — lazy-loads and caches the JSON file for a manufacturer name.
-
----
-
 ## 6. Test Suite and Fixtures
 
 ### `tests/fixtures/fake_connection.py`
