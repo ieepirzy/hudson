@@ -251,8 +251,16 @@ class ObdConnection:
             False,
         )
 
-        async with self._lock:
-            resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+        config_timeout = self._config.timeout
+        atst_changed = abs(timeout - config_timeout) > 1e-4
+        if atst_changed:
+            await self.send_at(_atst_for(timeout))
+        try:
+            async with self._lock:
+                resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+        finally:
+            if atst_changed:
+                await self.send_at(_atst_for(config_timeout))
 
         if resp.is_null() or resp.value is None:
             return None
@@ -435,8 +443,16 @@ class ObdConnection:
             False,
         )
 
-        async with self._lock:
-            resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+        config_timeout = self._config.timeout
+        atst_changed = abs(timeout - config_timeout) > 1e-4
+        if atst_changed:
+            await self.send_at(_atst_for(timeout))
+        try:
+            async with self._lock:
+                resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+        finally:
+            if atst_changed:
+                await self.send_at(_atst_for(config_timeout))
 
         if resp.is_null() or resp.value is None:
             return None
@@ -501,8 +517,16 @@ class ObdConnection:
             False,
         )
 
-        async with self._lock:
-            resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+        config_timeout = self._config.timeout
+        atst_changed = abs(timeout - config_timeout) > 1e-4
+        if atst_changed:
+            await self.send_at(_atst_for(timeout))
+        try:
+            async with self._lock:
+                resp = await asyncio.to_thread(self._conn.query, cmd, force=True)
+        finally:
+            if atst_changed:
+                await self.send_at(_atst_for(config_timeout))
 
         if resp.is_null() or resp.value is None:
             return None
