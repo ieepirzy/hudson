@@ -262,6 +262,9 @@ _MOCK_TOYOTA_UDS_RESPONSES: dict[int, bytes] = {
 # Block 0x10: RPM(2) coolant(1) intake(1) throttle(1) load(1)
 _MOCK_TOYOTA_ENHANCED_LOCAL: dict[int, bytes] = {
     0x10: bytes([0x17, 0x70, 0x7D, 0x4B, 0x26, 0x4D]),
+    # Block 0xD9: torque_converter_temp = 125 + 0/256 - 40 = 85 °C,
+    # pan_temp = 130 + 0/256 - 40 = 90 °C.
+    0xD9: bytes([0x7D, 0x00, 0x00, 0x00, 0x82, 0x00, 0x00, 0x00]),
 }
 
 
