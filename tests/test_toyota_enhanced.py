@@ -19,6 +19,7 @@ from Hudson.manufacturers.toyota import (
     _byte_minus40,
     _byte_pct,
     _rpm_16bit,
+    _word_fixed88_minus40,
     read_enhanced_block,
     read_enhanced_pid,
 )
@@ -126,6 +127,28 @@ async def test_null_uds_response_returns_none() -> None:
 
 
 # ── read_enhanced_block (mode 0x21) ──────────────────────────────────────────
+
+def test_word_fixed88_minus40_typical() -> None:
+    # 125 + 0/256 - 40 = 85 °C
+    assert _word_fixed88_minus40(bytes([0x7D, 0x00])) == pytest.approx(85.0)
+
+
+def test_word_fixed88_minus40_zero_raw() -> None:
+    assert _word_fixed88_minus40(bytes([0x00, 0x00])) == pytest.approx(-40.0)
+
+
+def test_word_fixed88_minus40_short_returns_none() -> None:
+    assert _word_fixed88_minus40(bytes([0x7D])) is None
+
+
+async def test_read_transmission_temp_block() -> None:
+    conn = FakeToyotaConnection()
+    await conn.connect()
+    result = await read_enhanced_block(conn, "TRANSMISSION_TEMP")
+    assert result is not None
+    assert result["torque_converter_temp"] == pytest.approx(85.0)
+    assert result["pan_temp"] == pytest.approx(90.0)
+
 
 async def test_read_engine_data_block_rpm() -> None:
     conn = FakeToyotaConnection()

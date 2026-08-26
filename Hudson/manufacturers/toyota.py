@@ -50,6 +50,11 @@ def _byte_kmh(data: bytes) -> float | None:
     return float(data[0]) if len(data) >= 1 else None
 
 
+def _word_fixed88_minus40(data: bytes) -> float | None:
+    """2-byte fixed-point temp: A + B/256 - 40 → °C (mode 0x21 pattern, e.g. 0x21D9)."""
+    return (data[0] + data[1] / 256.0 - 40.0) if len(data) >= 2 else None
+
+
 # ── Mode 0x22 enhanced PID definitions ───────────────────────────────────────
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +105,13 @@ class EnhancedBlock:
 
 # Block 0x10 is common on 1NZ/2AZ/2ZZ family ECUs. Byte layout needs
 # hardware verification — offsets are based on community disassembly notes.
+#
+# Block 0xD9 (transmission fluid temperature) is HIGH confidence: verified
+# against TechStream on RAV4 2GR-FE (source: MR2OC RAV4 CAN bus decode).
+# Response is an 8-byte multi-frame reply; torque_converter_temp sits at
+# bytes 1-2 and pan_temp at bytes 5-6 (1-indexed in the source material,
+# offsets below are 0-indexed). pan_temp reads 0x0000 (-40 °C after decode)
+# on variants without a second sensor fitted.
 ENHANCED_BLOCKS: dict[str, EnhancedBlock] = {
     "ENGINE_DATA": EnhancedBlock(
         0x10,
@@ -110,6 +122,14 @@ ENHANCED_BLOCKS: dict[str, EnhancedBlock] = {
             BlockField("intake_temp", 3, 1, "°C",   _byte_minus40),
             BlockField("throttle",    4, 1, "%",    _byte_pct),
             BlockField("engine_load", 5, 1, "%",    _byte_pct),
+        ),
+    ),
+    "TRANSMISSION_TEMP": EnhancedBlock(
+        0xD9,
+        "Transmission Fluid Temperature",
+        (
+            BlockField("torque_converter_temp", 0, 2, "°C", _word_fixed88_minus40),
+            BlockField("pan_temp",               4, 2, "°C", _word_fixed88_minus40),
         ),
     ),
 }
